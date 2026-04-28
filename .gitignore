@@ -1,0 +1,29 @@
+# 환경변수 (민감 정보)
+.env
+.env.local
+.env.*.local
+
+# 가상환경
+venv/
+mars-platform/
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# ChromaDB 데이터 및 로그
+chroma_data/
+chroma.log
+*.log
+
+# Claude Code
+.claude/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
