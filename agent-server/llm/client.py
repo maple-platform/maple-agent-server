@@ -1,22 +1,17 @@
 import os
+import json
 import base64
 import httpx
 from typing import AsyncIterator
 
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
-LLM_MODEL = os.getenv("LLM_MODEL", "gemma4:31b")
-VLM_MODEL = os.getenv("VLM_MODEL", "gemma4:31b")  # 동일 모델, multimodal 지원
-
-# B200 183GB VRAM 활용: 모든 레이어 GPU 오프로드 + 컨텍스트 크기
-_GPU_OPTIONS = {
-    "num_gpu": 99,       # 모든 레이어를 GPU에 올림 (99 = 전체)
-    "num_ctx": int(os.getenv("OLLAMA_NUM_CTX", "16384")),
-}
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8003/v1")
+LLM_MODEL = os.getenv("LLM_MODEL", "google/gemma-4-31B-it")
+VLM_MODEL = os.getenv("VLM_MODEL", "google/gemma-4-31B-it")
+MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2048"))
 
 
 def normalize_images(images: list[str] | None) -> list[str]:
-    """Ollama /api/generate expects raw base64 strings, not data URLs."""
     normalized = []
     for image in images or []:
         if not image or not isinstance(image, str):
@@ -35,70 +30,82 @@ def normalize_images(images: list[str] | None) -> list[str]:
     return normalized
 
 
+def _build_messages(prompt: str, system: str = "") -> list[dict]:
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    return messages
+
+
 async def generate(prompt: str, system: str = "") -> str:
     payload = {
         "model": LLM_MODEL,
-        "prompt": prompt,
+        "messages": _build_messages(prompt, system),
+        "max_tokens": MAX_TOKENS,
         "stream": False,
-        "options": _GPU_OPTIONS,
     }
-    if system:
-        payload["system"] = system
-
     async with httpx.AsyncClient(timeout=120.0) as client:
-        resp = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
+        resp = await client.post(f"{LLM_BASE_URL}/chat/completions", json=payload)
         resp.raise_for_status()
-        return resp.json()["response"]
+        return resp.json()["choices"][0]["message"]["content"]
 
 
 async def stream_generate(prompt: str, system: str = "") -> AsyncIterator[str]:
     payload = {
         "model": LLM_MODEL,
-        "prompt": prompt,
+        "messages": _build_messages(prompt, system),
+        "max_tokens": MAX_TOKENS,
         "stream": True,
-        "options": _GPU_OPTIONS,
     }
-    if system:
-        payload["system"] = system
-
     async with httpx.AsyncClient(timeout=120.0) as client:
-        async with client.stream("POST", f"{OLLAMA_URL}/api/generate", json=payload) as resp:
+        async with client.stream("POST", f"{LLM_BASE_URL}/chat/completions", json=payload) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
-                if line:
-                    import json
-                    data = json.loads(line)
-                    yield data.get("response", "")
-                    if data.get("done"):
-                        break
+                if not line.startswith("data: "):
+                    continue
+                data_str = line[6:]
+                if data_str == "[DONE]":
+                    break
+                data = json.loads(data_str)
+                content = data["choices"][0].get("delta", {}).get("content", "")
+                if content:
+                    yield content
 
 
 async def generate_with_images(prompt: str, images: list[str], system: str = "") -> str:
-    """이미지(base64 문자열 리스트)와 텍스트를 함께 VLM에 전달"""
-    normalized_images = normalize_images(images)
-    if not normalized_images:
+    normalized = normalize_images(images)
+    if not normalized:
         return await generate(prompt, system=system)
+
+    content = [{"type": "text", "text": prompt}]
+    for img in normalized:
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{img}"},
+        })
+
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": content})
 
     payload = {
         "model": VLM_MODEL,
-        "prompt": prompt,
-        "images": normalized_images,
+        "messages": messages,
+        "max_tokens": MAX_TOKENS,
         "stream": False,
-        "options": _GPU_OPTIONS,
     }
-    if system:
-        payload["system"] = system
-
     async with httpx.AsyncClient(timeout=180.0) as client:
-        resp = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
+        resp = await client.post(f"{LLM_BASE_URL}/chat/completions", json=payload)
         resp.raise_for_status()
-        return resp.json()["response"]
+        return resp.json()["choices"][0]["message"]["content"]
 
 
 async def is_available() -> bool:
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{OLLAMA_URL}/api/tags")
+            resp = await client.get(f"{LLM_BASE_URL}/models")
             return resp.status_code == 200
     except Exception:
         return False

@@ -13,13 +13,13 @@ async def lifespan(_: FastAPI):
     import logging
     logger = logging.getLogger("mars-ai-agent")
 
-    from llm.client import is_available as ollama_ok
+    from llm.client import is_available as llm_ok
     from rag.embedder import get_client as chroma_client
 
-    if await ollama_ok():
-        logger.info("Ollama 연결 확인")
+    if await llm_ok():
+        logger.info("vLLM 연결 확인")
     else:
-        logger.warning("Ollama 연결 실패 — LLM 기능이 동작하지 않을 수 있습니다")
+        logger.warning("vLLM 연결 실패 — LLM 기능이 동작하지 않을 수 있습니다")
 
     try:
         chroma_client().list_collections()
@@ -50,11 +50,11 @@ app.include_router(models.router, prefix="/agent/models", tags=["models"])
 
 @app.get("/health")
 async def health():
-    from llm.client import is_available as ollama_ok
+    from llm.client import is_available as llm_ok
     from rag.embedder import get_client as chroma_client
     import os
 
-    ollama_status = "ok" if await ollama_ok() else "unavailable"
+    llm_status = "ok" if await llm_ok() else "unavailable"
 
     try:
         col = chroma_client()
@@ -63,14 +63,14 @@ async def health():
     except Exception:
         chroma_status = "unavailable"
 
-    overall = "ok" if ollama_status == "ok" and chroma_status == "ok" else "degraded"
+    overall = "ok" if llm_status == "ok" and chroma_status == "ok" else "degraded"
 
     return {
         "status": overall,
         "service": "mars-ai-agent",
-        "ollama": ollama_status,
+        "vllm": llm_status,
         "chromadb": chroma_status,
-        "model": os.getenv("LLM_MODEL", "gemma4:31b"),
+        "model": os.getenv("LLM_MODEL", "google/gemma-4-31B-it"),
     }
 
 
