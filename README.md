@@ -19,8 +19,8 @@ MARS AI 플랫폼은 세 개의 독립적인 서버로 구성됩니다.
       │
       │  HTTP (SSH터널 → localhost:8001)
       ▼
-[AI Agent]     MARS_AI_Agent (NHN Cloud B200, Port 8001)    ◄── 이 저장소
-               ├── Ollama (Port 11434, gemma4:31b)
+[AI Agent]     MARS_AI_Agent (NHN Cloud B200 x2, Port 8001)    ◄── 이 저장소
+               ├── vLLM (Port 8003, gemma4:31B-it, tensor-parallel-size 2)
                ├── ChromaDB (Port 8002, RAG)
                └── /wiki (LLM Wiki, 지식 누적)
 ```
@@ -40,10 +40,10 @@ MARS AI 플랫폼은 세 개의 독립적인 서버로 구성됩니다.
 | **웹 프레임워크** | FastAPI | 0.115.0 | Agent API 서버 |
 | | Uvicorn | 0.30.6 | ASGI 서버 |
 | | Pydantic | 2.9.2 | 요청/응답 스키마 검증 |
-| **LLM / VLM** | Ollama (gemma4:31b) | - | 임상 해석 생성, 범용 멀티모달 분석 |
+| **LLM / VLM** | vLLM + gemma-4-31B-it | 0.20.0+ | 임상 해석 생성, 범용 멀티모달 분석 (B200 x2 텐서 병렬) |
 | **벡터 DB** | ChromaDB | 0.5.20 | 모델 레지스트리 + 논문/QA RAG 검색 |
 | **임베딩** | sentence-transformers | 3.2.1 | 모델 설명·논문 벡터화 (`all-MiniLM-L6-v2`) |
-| **HTTP 클라이언트** | httpx | 0.27.2 | Ollama 비동기 호출 |
+| **HTTP 클라이언트** | httpx | 0.27.2 | vLLM OpenAI 호환 API 비동기 호출 |
 | **Wiki** | 마크다운 파일 (`/wiki`) | - | 모델 메타데이터·임상 해석 패턴 누적 |
 
 ---
@@ -69,9 +69,9 @@ MARS AI 플랫폼은 세 개의 독립적인 서버로 구성됩니다.
     ↓
 1. Wiki index.md 확인 → 관련 모델/개념 페이지 파악
     ↓
-2. (필요시) RAG → ChromaDB에서 논문/QA 검색 보완
+2. RAG → ChromaDB mars_models + mars_knowledge 병렬 검색
     ↓
-3. Gemma4:31b → Wiki + RAG 결과 합쳐서 응답 생성
+3. gemma-4-31B-it → Wiki + RAG 결과 합쳐서 응답 생성
     ↓
 4. 좋은 응답/분석 → Wiki에 파일링 (지식 누적)
 ```
@@ -81,36 +81,39 @@ MARS AI 플랫폼은 세 개의 독립적인 서버로 구성됩니다.
 ## 폴더 구조
 
 ```
-mars-ai-agent/
-├── main.py                    # FastAPI 앱 진입점 (Port 8001)
-├── requirements.txt
-├── .env
-├── CLAUDE.md
+mars-platform-private/          # 모노레포 루트
+├── .gitignore
+├── README.md
 │
-├── wiki/                      # LLM Wiki (지식 누적 레이어)
-│   ├── index.md               # 전체 wiki 목록 및 요약 (항상 최신 유지)
-│   ├── log.md                 # 작업 이력 (append-only)
-│   ├── models/                # AI 모델별 페이지
-│   ├── departments/           # 진료과별 페이지
-│   ├── concepts/              # 의학 개념 페이지
-│   └── interpretations/       # 누적된 임상 해석 패턴
-│
-├── services/
-│   ├── agent_service.py       # 핵심 오케스트레이션 (plan / interpret)
-│   ├── wiki_service.py        # Wiki 읽기/쓰기/업데이트
-│   └── rag_service.py         # ChromaDB RAG 검색 래퍼
-│
-├── llm/
-│   ├── client.py              # Ollama 비동기 클라이언트 (generate / generate_with_images)
-│   └── prompts.py             # 프롬프트 템플릿
-│
-├── rag/
-│   ├── embedder.py            # ChromaDB upsert / delete / get
-│   └── retriever.py           # ChromaDB query + 결과 포맷 (score = 1 - cosine distance)
-│
-└── routers/
-    ├── agent.py               # /agent/plan, /agent/interpret
-    └── models.py              # /agent/models/*
+└── agent-server/               # AI Agent 서버 (이 패키지)
+    ├── main.py                 # FastAPI 앱 진입점 (Port 8001)
+    ├── requirements.txt
+    ├── .env.example
+    │
+    ├── wiki/                   # LLM Wiki (지식 누적 레이어)
+    │   ├── index.md            # 전체 wiki 목록 및 요약 (항상 최신 유지)
+    │   ├── log.md              # 작업 이력 (append-only)
+    │   ├── models/             # AI 모델별 페이지
+    │   ├── departments/        # 진료과별 페이지
+    │   ├── concepts/           # 의학 개념 페이지
+    │   └── interpretations/    # 누적된 임상 해석 패턴
+    │
+    ├── services/
+    │   ├── agent_service.py    # 핵심 오케스트레이션 (plan / interpret)
+    │   ├── wiki_service.py     # Wiki 읽기/쓰기/업데이트
+    │   └── rag_service.py      # ChromaDB RAG 병렬 검색 (asyncio.gather)
+    │
+    ├── llm/
+    │   ├── client.py           # vLLM OpenAI 호환 비동기 클라이언트
+    │   └── prompts.py          # 프롬프트 템플릿
+    │
+    ├── rag/
+    │   ├── embedder.py         # ChromaDB upsert / delete / get
+    │   └── retriever.py        # ChromaDB query + 결과 포맷
+    │
+    └── routers/
+        ├── agent.py            # /agent/plan, /agent/interpret
+        └── models.py           # /agent/models/*
 ```
 
 ---
@@ -136,7 +139,7 @@ mars-ai-agent/
 
 | Method | Endpoint | 설명 |
 |---|---|---|
-| `GET` | `/health` | 헬스체크 (Ollama + ChromaDB 연결 상태 포함) |
+| `GET` | `/health` | 헬스체크 (vLLM + ChromaDB 연결 상태 포함) |
 
 ---
 
@@ -171,8 +174,8 @@ mars-ai-agent/
 | mode | Agent 처리 |
 |---|---|
 | `prediction` | ChromaDB `mars_models` 검색 → required_data 매칭 → 실행 계획 반환 |
-| `clinical` | Wiki + RAG(PubMedQA·MedMCQA) 검색 → LLM 즉시 답변 |
-| `general` | 이미지(VLM) + CSV 수치 데이터 → Gemma4 종합 분석 |
+| `clinical` | Wiki + RAG(PubMedQA·MedMCQA) 병렬 검색 → LLM 즉시 답변 |
+| `general` | 이미지(VLM) + CSV 수치 데이터 → gemma-4-31B-it 종합 분석 |
 | `auto` | `images` / `csv_data` 있으면 `general`로 분기; 없으면 LLM이 쿼리 분석 후 `execution` / `knowledge` / `general` 중 판단 |
 
 **Response — prediction 모드**
@@ -410,16 +413,16 @@ LLM 판단 결과에 따라 `prediction` / `clinical` / `general` 응답 형식 
 {
   "status": "ok",
   "service": "mars-ai-agent",
-  "ollama": "ok",
+  "vllm": "ok",
   "chromadb": "ok",
-  "model": "gemma4:31b"
+  "model": "google/gemma-4-31B-it"
 }
 ```
 
 | 필드 | 값 |
 |---|---|
-| `status` | `ok` (Ollama + ChromaDB 모두 정상) \| `degraded` (하나 이상 불가) |
-| `ollama` | `ok` \| `unavailable` |
+| `status` | `ok` (vLLM + ChromaDB 모두 정상) \| `degraded` (하나 이상 불가) |
+| `vllm` | `ok` \| `unavailable` |
 | `chromadb` | `ok` \| `unavailable` |
 | `model` | 현재 설정된 LLM 모델명 |
 
@@ -448,7 +451,6 @@ LLM 판단 결과에 따라 `prediction` / `clinical` / `general` 응답 형식 
 | `"gz"` (단독) | 정규화 없음 (모델이 `nifti` 요구 시 조건부 허용) |
 
 > NIfTI 조건부 처리: 모델의 `required_data`에 `"nifti"`가 포함된 경우, `"gz"` 단독 확장자도 자동 허용합니다.
-> 백엔드가 `.nii.gz` 파일을 처리할 때 마지막 확장자 `"gz"`만 전송할 수 있기 때문입니다.
 
 ---
 
@@ -477,9 +479,6 @@ Agent: 관련 모델 Wiki 페이지 수집 (최대 600자)
        해석 결과를 wiki/models/{model_name}.md에 누적
     ↓
 ← {interpretation, interpretation_raw, images} 반환
-   interpretation / interpretation_raw: [IMG:role] 마커가 포함된 동일한 raw 마크다운 텍스트
-   images: {role → "data:image/png;base64,..."} 맵
-   (백엔드가 images 맵을 이용해 [IMG:role] 마커를 <figure><img> 태그로 치환)
 ```
 
 ### clinical 모드
@@ -488,7 +487,7 @@ Agent: 관련 모델 Wiki 페이지 수집 (최대 600자)
 POST /agent/plan {mode: "clinical", query}
     ↓
 Agent: wiki_service.search_wiki(query) — 키워드 매칭, 최대 3개 페이지 반환
-       rag_service.retrieve(query) — ChromaDB mars_models(3개) + mars_knowledge(5개) 검색
+       rag_service.retrieve(query) — ChromaDB mars_models(3개) + mars_knowledge(5개) 병렬 검색
        LLM으로 임상 답변 생성
     ↓
 ← {query_type: "knowledge", mode: "clinical", message, sources, model_suggestion} 반환
@@ -513,7 +512,7 @@ Agent: 이미지가 있으면 VLM(generate_with_images), 없으면 LLM(generate)
 POST /agent/plan {mode: "auto", query, uploaded_types}
     ↓
 Agent: request에 images / csv_data가 있으면 → general 분기
-       없으면: Wiki + RAG 검색 후 LLM이 쿼리 유형 판단
+       없으면: Wiki + RAG 병렬 검색 후 LLM이 쿼리 유형 판단
          → "execution" : prediction 응답 반환
          → "knowledge" : clinical 응답 형식으로 반환
          → "general"   : _general(query, [], [])으로 재분기
@@ -581,13 +580,14 @@ axSpA, 강직성 척추염
 
 ## 환경 변수
 
-`.env` 파일 또는 환경변수로 설정합니다.
+`.env` 파일 또는 환경변수로 설정합니다. `.env.example` 참고.
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
-| `OLLAMA_URL` | `http://localhost:11434` | Ollama 서버 URL |
-| `LLM_MODEL` | `gemma4:31b` | 텍스트 생성 모델명 |
-| `VLM_MODEL` | `gemma4:31b` | 이미지 포함 VLM 모델명 (기본값은 LLM_MODEL과 동일) |
+| `LLM_BASE_URL` | `http://localhost:8003/v1` | vLLM OpenAI 호환 API URL |
+| `LLM_MODEL` | `google/gemma-4-31B-it` | 텍스트 생성 모델명 (HuggingFace ID) |
+| `VLM_MODEL` | `google/gemma-4-31B-it` | 이미지 포함 VLM 모델명 |
+| `LLM_MAX_TOKENS` | `2048` | 최대 생성 토큰 수 |
 | `CHROMA_HOST` | `localhost` | ChromaDB 호스트 |
 | `CHROMA_PORT` | `8002` | ChromaDB 포트 |
 | `WIKI_PATH` | `./wiki` | Wiki 마크다운 파일 경로 |
@@ -598,32 +598,69 @@ axSpA, 강직성 척추염
 
 **사전 요구사항**
 - Python 3.10+
-- Ollama (`localhost:11434`, `gemma4:31b` 모델 pull 완료)
+- vLLM 0.20.0+, transformers 5.5.0+
 - ChromaDB (`localhost:8002`)
+- NVIDIA GPU (B200 권장, FP16/BF16 지원)
 
 ```bash
+cd agent-server
+
 # 의존성 설치
 pip install -r requirements.txt
 
-# 서버 실행
-uvicorn main:app --host 0.0.0.0 --port 8001 --reload
+# 1. vLLM 서버 시작 (별도 터미널, B200 x2 텐서 병렬)
+python -m vllm.entrypoints.openai.api_server \
+  --model google/gemma-4-31B-it \
+  --tensor-parallel-size 2 \
+  --port 8003 \
+  --max-model-len 8192
+
+# 2. ChromaDB 서버 시작 (별도 터미널)
+chroma run --host 0.0.0.0 --port 8002 --path ./chroma_data
+
+# 3. Agent 서버 실행
+python main.py
 ```
 
 API 문서: http://localhost:8001/docs
 
-**ChromaDB 실행 (최초 1회)**
+**ChromaDB 초기 데이터 ingest (최초 1회)**
 
 ```bash
-# ChromaDB 서버 실행
-chroma run --host 0.0.0.0 --port 8002 --path ./chroma_data
-
-# 사전 지식 ingest (최초 1회)
 python scripts/ingest_knowledge.py
 ```
 
 ---
 
 ## 트러블슈팅
+
+### vLLM 시작 시 GPU 메모리 부족
+
+```
+ValueError: Free memory on device cuda:1 is less than desired GPU memory utilization
+```
+
+다른 프로세스(Ollama 등)가 GPU 메모리를 점유하고 있습니다.
+
+```bash
+# 점유 프로세스 확인
+nvidia-smi
+# 해당 프로세스 종료 후 vLLM 재시작
+```
+
+### vLLM 시작 시 gemma4 아키텍처 인식 불가
+
+```
+model type `gemma4` but Transformers does not recognize this architecture
+```
+
+transformers 버전이 낮습니다.
+
+```bash
+pip install --upgrade transformers
+```
+
+---
 
 ### ChromaDB tenant 오류
 
@@ -636,20 +673,6 @@ Agent 서버 최초 실행 시 ChromaDB를 먼저 띄운 후 `ingest_knowledge.p
 ```bash
 chroma run --host 0.0.0.0 --port 8002 --path ./chroma_data
 python scripts/ingest_knowledge.py
-```
-
----
-
-### Ollama 모델 미설치
-
-```
-404 model not found
-```
-
-Ollama에 `gemma4:31b` 모델이 pull되어 있지 않은 경우입니다.
-
-```bash
-ollama pull gemma4:31b
 ```
 
 ---
@@ -694,5 +717,5 @@ Agent는 다음 조건을 만족하지 못하면 자동으로 재생성을 시�
 - 문장 수 4개 미만
 
 재시도 후에도 품질이 부족하면 서버 측 폴백 텍스트를 반환합니다.
-Ollama 타임아웃 (`generate`: 120초, `generate_with_images`: 180초)이 너무 짧은 경우,
+vLLM 타임아웃 (`generate`: 120초, `generate_with_images`: 180초)이 너무 짧은 경우,
 `llm/client.py`의 `timeout` 값을 늘리는 것을 고려하세요.
