@@ -1,3 +1,4 @@
+import re
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -61,6 +62,7 @@ async def register_model(req: ModelRegisterRequest):
             "department": req.department,
             "project": req.project,
             "task_type": req.task_type,
+            "required_data": ", ".join(req.required_data),
             "result_type": req.result_type,
         },
     )
@@ -68,41 +70,47 @@ async def register_model(req: ModelRegisterRequest):
     return {
         "status": "registered",
         "model_name": req.model_name,
-        "wiki_page": f"wiki/models/{req.model_name}.md",
+        "wiki_page": f"wiki/models/{req.project}/{req.model_name}.md",
         "department_page": f"wiki/departments/{req.department}.md",
     }
 
 
 @router.delete("/{model_id}")
 async def delete_model(model_id: str):
-    # ChromaDB에서 model_id로 model_name 역조회
-    model_name = embedder.get_model_name(model_id)
-    if not model_name:
+    col = embedder._get_collection("mars_models")
+    result = col.get(ids=[model_id], include=["metadatas"])
+    if not result["ids"]:
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found in registry")
 
-    # Wiki 삭제
-    wiki_service.delete_model_page(model_name)
-    wiki_service.remove_model_from_index(model_name)
-    wiki_service.append_log("delete", f"{model_name} 모델 삭제")
+    meta = result["metadatas"][0]
+    model_name = meta.get("model_name", "")
+    project = meta.get("project", "")
 
-    # ChromaDB 삭제
+    wiki_service.delete_model_page(project, model_name)
+    wiki_service.remove_model_from_index(project, model_name)
+    wiki_service.append_log("delete", f"{project}/{model_name} 모델 삭제")
+
     embedder.delete_model(model_id)
 
-    return {"status": "deleted", "model_id": model_id, "model_name": model_name}
+    return {"status": "deleted", "model_id": model_id, "model_name": model_name, "project": project}
 
 
 @router.get("/lookup")
-async def lookup_model(model_name: str):
-    content = wiki_service.read_page("models", model_name)
-    if not content:
-        raise HTTPException(status_code=404, detail=f"Model {model_name} not found in wiki")
+async def lookup_model(model_name: str, project: str = ""):
+    if not project:
+        resolved = wiki_service.resolve_model(model_name)
+        if not resolved:
+            raise HTTPException(status_code=404, detail=f"Model {model_name} not found in wiki")
+        project, model_name = resolved
 
-    # 간단 파싱
-    department, project = "", ""
+    content = wiki_service.read_model_page(project, model_name)
+    if not content:
+        raise HTTPException(status_code=404, detail=f"Model {project}/{model_name} not found in wiki")
+
+    department = ""
     for line in content.splitlines():
         if line.startswith("- **진료과:**"):
-            department = line.split(":", 1)[1].strip()
-        elif line.startswith("- **프로젝트:**"):
-            project = line.split(":", 1)[1].strip()
+            department = re.sub(r'\*+', '', line.split(":", 1)[1]).strip()
+            break
 
-    return {"model_name": model_name, "department": department, "project": project}
+    return {"model_name": model_name, "project": project, "department": department}

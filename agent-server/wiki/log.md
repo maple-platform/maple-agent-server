@@ -87,3 +87,58 @@
 ## [2026-04-28] interpret | SI Joints Detection 결과 해석 완료
 ## [2026-04-28] interpret | SI Joints Detection 결과 해석 완료
 ## [2026-04-28] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-02] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-02] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-02] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-02] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-02] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-02] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-02] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-02] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-02] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-02] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-02] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-02] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-02] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-02] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-02] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-02] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-02] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-02] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-02] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-02] interpret | nnUNet SMWI Segmentation 결과 해석 완료
+## [2026-05-02] interpret | nnUNet SMWI Segmentation 결과 해석 완료
+## [2026-05-02] interpret | nnUNet SMWI Segmentation 결과 해석 완료
+## [2026-05-02] interpret | nnUNet SMWI Segmentation 결과 해석 완료
+## [2026-05-02] interpret | nnUNet SMWI Segmentation 결과 해석 완료
+## [2026-05-02] interpret | nnUNet SMWI Segmentation 결과 해석 완료
+## [2026-05-02] interpret | nnUNet SMWI Segmentation 결과 해석 완료
+## [2026-05-02] interpret | nnUNet SMWI Segmentation 결과 해석 완료
+## [2026-05-02] interpret | nnUNet SMWI Segmentation 결과 해석 완료
+## [2026-05-02] interpret | Parkinson Gait 결과 해석 완료
+## [2026-05-02] interpret | Parkinson Gait 결과 해석 완료
+## [2026-05-02] interpret | Parkinson Gait 결과 해석 완료
+## [2026-05-02] interpret | Parkinson Gait 결과 해석 완료
+## [2026-05-02] interpret | Parkinson Gait 결과 해석 완료
+## [2026-05-02] interpret | Parkinson Gait 결과 해석 완료
+## [2026-05-02] interpret | Parkinson Gait 결과 해석 완료
+## [2026-05-02] interpret | Parkinson Gait 결과 해석 완료
+## [2026-05-03] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-03] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-03] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-03] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-03] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-03] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-04] interpret | Parkinson Gait 결과 해석 완료
+## [2026-05-04] interpret | Parkinson Gait 결과 해석 완료
+## [2026-05-04] interpret | Parkinson Gait 결과 해석 완료
+## [2026-05-06] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-08] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-08] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-08] interpret | nnUNet SMWI Segmentation 결과 해석 완료
+## [2026-05-08] interpret | nnUNet SMWI Segmentation 결과 해석 완료
+## [2026-05-08] interpret | SI Joints Detection 결과 해석 완료
+## [2026-05-08] interpret | SI Joints Detection/YOLOv12 결과 해석 완료
+## [2026-05-08] interpret | BME Classification/GradCAM++ 결과 해석 완료
+## [2026-05-08] interpret | SI Joints Detection/YOLOv12 결과 해석 완료
+## [2026-05-08] interpret | BME Classification/GradCAM++ 결과 해석 완료

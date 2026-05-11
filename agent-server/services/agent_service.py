@@ -17,6 +17,7 @@ from llm.prompts import (
     build_interpret_prompt,
     build_general_prompt,
 )
+from llm.prompts.utils import sort_image_roles
 
 logger = logging.getLogger("mars-ai-agent")
 
@@ -38,11 +39,7 @@ async def plan(
     if mode == "general":
         return await _general(query, images, csv_data)
 
-    # mode == "auto": 데이터가 있으면 general 우선 분기
-    if images or csv_data:
-        return await _general(query, images, csv_data)
-
-    return await _auto(query, uploaded_types)
+    return await _auto(query, uploaded_types, images, csv_data)
 
 
 # ── 파일 타입 정규화 ───────────────────────────────────────────────────────────
@@ -145,6 +142,8 @@ async def _clinical(query: str) -> dict:
 
     prompt = build_clinical_prompt(query, wiki_context, rag_context)
     message = await llm_client.generate(prompt, system=SYSTEM_CLINICAL)
+
+    wiki_service.upsert_concept(query, message)
 
     sources = []
     for r in knowledge_results:
@@ -272,13 +271,12 @@ def _get_required_data(meta: dict, model_name: str) -> list[str]:
         if isinstance(val, list):
             return val
 
-    # Wiki 페이지에서 파싱
-    if model_name:
-        from services import wiki_service
-        page = wiki_service.read_page("models", model_name)
+    # Wiki 페이지에서 파싱 (project + model_name으로 조회)
+    project = meta.get("project", "")
+    if project and model_name:
+        page = wiki_service.read_model_page(project, model_name)
         for line in page.splitlines():
             if "required_data" in line:
-                # - **required_data:** [dicom, csv]
                 start = line.find("[")
                 end = line.find("]")
                 if start != -1 and end != -1:
@@ -300,19 +298,36 @@ async def _general(query: str, images: list[str], csv_data: list[dict]) -> dict:
             f"{prompt}\n\n"
             "## 시스템 참고\n"
             "첨부 이미지의 VLM 분석 요청이 실패하여 텍스트/수치 데이터만 기반으로 답변하세요. "
-            f"Ollama 오류 요약: {detail}"
+            "응답은 반드시 영어로 작성하세요. "
+            f"LLM 오류 요약:{detail}"
         )
         result = await llm_client.generate(fallback_prompt, system=SYSTEM_GENERAL)
 
     return {"query_type": "general", "mode": "general", "message": result}
 
 
-async def _auto(query: str, uploaded_types: list[str]) -> dict:
-    """기존 LLM 기반 자동 분류"""
+async def _auto(
+    query: str,
+    uploaded_types: list[str],
+    images: list[str] | None = None,
+    csv_data: list[dict] | None = None,
+) -> dict:
+    """LLM 기반 자동 분류 — execution / knowledge / general 중 하나로 라우팅"""
+    images = images or []
+    csv_data = csv_data or []
+
     wiki_context = wiki_service.search_wiki(query)
     model_results, knowledge_results, rag_context = await retrieve(query)
 
-    prompt = build_plan_prompt(query, uploaded_types, wiki_context, rag_context)
+    SCORE_THRESHOLD = 0.40
+    available_models = [
+        r["metadata"] for r in model_results
+        if r.get("score", 0) >= SCORE_THRESHOLD and r.get("metadata")
+    ]
+    prompt = build_plan_prompt(
+        query, _normalize_types(uploaded_types), wiki_context, rag_context,
+        available_models=available_models,
+    )
     raw = await llm_client.generate(prompt, system=SYSTEM_PLAN)
     parsed = _parse_json_response(raw)
 
@@ -327,8 +342,7 @@ async def _auto(query: str, uploaded_types: list[str]) -> dict:
             "message": parsed.get("message", "실행 계획이 수립되었습니다."),
         }
     elif parsed.get("type") == "general":
-        # auto에서 general로 재분기 (데이터 없이 텍스트만 온 경우)
-        return await _general(query, [], [])
+        return await _general(query, images, csv_data)
     else:
         sources = []
         for r in (model_results + knowledge_results):
@@ -356,9 +370,11 @@ async def interpret(
     model_names = [r.get("model", "") for r in step_results]
     wiki_ctx_parts = []
     for name in model_names:
-        page = wiki_service.read_page("models", name)
-        if page:
-            wiki_ctx_parts.append(f"### {name}\n{page[:600]}")
+        resolved = wiki_service.resolve_model(name)
+        if resolved:
+            page = wiki_service.read_model_page(resolved[0], resolved[1])
+            if page:
+                wiki_ctx_parts.append(f"### {name}\n{page[:600]}")
     wiki_context = "\n\n".join(wiki_ctx_parts)
 
     # 2. step_results에서 이미지 추출 (role → data 매핑 유지)
@@ -377,6 +393,8 @@ async def interpret(
             if not data:
                 continue
             if role:
+                if role in image_map:
+                    logger.warning("[interpret] duplicate image role '%s' — overwriting with step %s data", role, step.get("step"))
                 image_map[role] = data
                 ordered_roles.append(role)
                 step_roles.append(role)
@@ -413,7 +431,8 @@ async def interpret(
             f"{prompt}\n\n"
             "## 시스템 참고\n"
             "첨부 이미지의 VLM 해석 요청이 실패하여 텍스트 형태의 모델 출력만 기반으로 해석하세요. "
-            f"Ollama 오류 요약: {detail}"
+            "응답은 반드시 영어로 작성하세요. "
+            f"LLM 오류 요약:{detail}"
         )
         interpretation = await llm_client.generate(fallback_prompt, system=SYSTEM_INTERPRET)
     except httpx.HTTPError as e:
@@ -423,7 +442,8 @@ async def interpret(
             "## 시스템 참고\n"
             "첨부 이미지의 LLM/VLM 요청 중 네트워크 또는 타임아웃 오류가 발생하여 "
             "텍스트 형태의 모델 출력만 기반으로 해석을 시도합니다. "
-            f"Ollama 오류 요약: {type(e).__name__}: {e}"
+            "응답은 반드시 영어로 작성하세요. "
+            f"LLM 오류 요약:{type(e).__name__}: {e}"
         )
         try:
             interpretation = await llm_client.generate(fallback_prompt, system=SYSTEM_INTERPRET)
@@ -438,8 +458,8 @@ async def interpret(
         retry_prompt = (
             f"{prompt}\n\n"
             "## 재출력 지시\n"
-            "방금 응답은 분석 텍스트가 부족했습니다. 이번에는 반드시 충분한 한국어 해석 문장으로 다시 작성하세요.\n"
-            "- `## 요약`, `## 주요 영상 소견`, `## 임상적 해석`, `## 권고 또는 한계` 4개 섹션을 모두 포함하세요.\n"
+            "The previous response did not contain enough analytic text. Rewrite it in English with sufficient clinical interpretation.\n"
+            "- Include all four sections: `## Summary`, `## Key Imaging Findings`, `## Clinical Interpretation`, and `## Recommendations or Limitations`.\n"
             "- 각 섹션은 최소 2문장 이상 작성하세요.\n"
             "- 이미지 토큰만 나열하지 말고, 실제 해석 문장을 중심으로 작성하세요.\n"
             "- `[IMG:role]` 토큰은 설명 문장 뒤에 배치하되, 본문 분석을 대체하면 안 됩니다."
@@ -472,10 +492,13 @@ async def interpret(
         image_roles,
     )
 
-    # 5. Wiki에 해석 패턴 누적
-    if model_names and model_names[0]:
-        wiki_service.append_interpretation(model_names[0], interpretation)
-        wiki_service.append_log("interpret", f"{model_names[0]} 결과 해석 완료")
+    # 5. Wiki에 해석 패턴 누적 — 파이프라인의 모든 모델에 저장
+    for name in dict.fromkeys(n for n in model_names if n):  # 중복 제거, 순서 유지
+        resolved = wiki_service.resolve_model(name)
+        if resolved:
+            project, model_name = resolved
+            wiki_service.append_interpretation(project, model_name, interpretation)
+            wiki_service.append_log("interpret", f"{project}/{model_name} 결과 해석 완료")
 
     return {
         "interpretation": interpretation,
@@ -483,14 +506,6 @@ async def interpret(
         "images": image_map,
     }
 
-
-def _sort_image_roles(roles: list[str]) -> list[str]:
-    def sort_key(role: str):
-        m = re.fullmatch(r"(.+?)_(\d+)", role)
-        if m:
-            return (m.group(1), int(m.group(2)))
-        return (role, -1)
-    return sorted(roles, key=sort_key)
 
 
 def _unique_preserve_order(items: list[str]) -> list[str]:
@@ -508,12 +523,12 @@ def _ensure_all_image_tokens(text: str, roles: list[str]) -> str:
     if not roles:
         return text
 
-    ordered_roles = _sort_image_roles(_unique_preserve_order(roles))
+    ordered_roles = sort_image_roles(_unique_preserve_order(roles))
     missing = [role for role in ordered_roles if f"[IMG:{role}]" not in text]
     if not missing:
         return text
 
-    appendix = "\n\n## 첨부 이미지\n" + "\n".join(f"[IMG:{role}]" for role in missing)
+    appendix = "\n\n## Attached Images\n" + "\n".join(f"[IMG:{role}]" for role in missing)
     return text.rstrip() + appendix
 
 
@@ -525,8 +540,15 @@ def _needs_interpretation_retry(text: str) -> bool:
         return True
 
     section_hits = sum(
-        1 for section in ("요약", "주요 영상 소견", "임상적 해석", "권고", "한계")
-        if section in text
+        1
+        for section in (
+            "Summary",
+            "Key Imaging Findings",
+            "Clinical Interpretation",
+            "Recommendations",
+            "Limitations",
+        )
+        if section.lower() in text.lower()
     )
     if section_hits < 3:
         return True
@@ -536,27 +558,27 @@ def _needs_interpretation_retry(text: str) -> bool:
 
 
 def _build_interpretation_fallback(task: dict, step_results: list[dict], image_roles: list[str]) -> str:
-    task_label = " / ".join(v for v in [task.get("department", ""), task.get("project", "")] if v) or "이번 검사"
-    model_names = ", ".join(r.get("model", "") for r in step_results if r.get("model")) or "모델"
-    result_types = ", ".join(sorted({r.get("result_type", "") for r in step_results if r.get("result_type")})) or "결과"
-    token_preview = "\n".join(f"[IMG:{role}]" for role in _sort_image_roles(image_roles[:4]))
+    task_label = " / ".join(v for v in [task.get("department", ""), task.get("project", "")] if v) or "this examination"
+    model_names = ", ".join(r.get("model", "") for r in step_results if r.get("model")) or "the model"
+    result_types = ", ".join(sorted({r.get("result_type", "") for r in step_results if r.get("result_type")})) or "outputs"
+    token_preview = "\n".join(f"[IMG:{role}]" for role in sort_image_roles(image_roles[:4]))
     if token_preview:
         token_preview = f"\n{token_preview}"
 
     return (
-        f"## 전체 요약\n"
-        f"{task_label}에 대해 {model_names}의 {result_types} 결과를 바탕으로 해석을 시도했습니다. "
-        f"현재 자동 생성된 상세 분석이 충분하지 않아, 아래 요약은 모델 출력과 첨부 이미지를 기준으로 한 보수적 1차 해석입니다."
+        f"## Summary\n"
+        f"For {task_label}, an interpretation was generated based on {result_types} from {model_names}. "
+        f"Because the automatically generated detailed analysis was insufficient, this summary should be considered a conservative preliminary interpretation based on the model outputs and attached images."
         f"{token_preview}\n\n"
-        f"## 라벨별/구조별/클래스별 분석\n"
-        f"첨부된 시각 자료는 모델이 분할 또는 탐지한 관심 영역의 위치와 범위를 보여줍니다. "
-        f"구조의 정확한 형태, 경계, 분포는 원본 영상과 함께 확인해야 하며 단일 이미지나 일부 슬라이스만으로 단정적으로 판단해서는 안 됩니다.\n\n"
-        f"## 임상적 의의\n"
-        f"현재 결과는 관심 구조의 존재 여부와 상대적 분포를 파악하는 보조 자료로 해석하는 것이 적절합니다. "
-        f"임상 증상, 원본 볼륨, 추가 판독 정보와 함께 종합할 때 의미가 커집니다.\n\n"
-        f"## 권고사항\n"
-        f"원본 영상 전체와 연속 슬라이스를 함께 검토하고, 필요한 경우 정량 지표 또는 전문의 판독으로 보완해 주세요. "
-        f"자동 분할 결과만으로 진단을 확정하지 않는 것이 바람직합니다."
+        f"## Key Imaging Findings\n"
+        f"The attached visual outputs show the location and extent of the regions segmented or detected by the model. "
+        f"The exact morphology, boundaries, and distribution should be verified against the original images, and a definitive conclusion should not be made from a single image or a limited number of slices alone.\n\n"
+        f"## Clinical Interpretation\n"
+        f"These results are best interpreted as supportive information for identifying the presence and relative distribution of the target structures or findings. "
+        f"Their clinical meaning is strengthened when integrated with symptoms, the full imaging volume, and additional radiology interpretation.\n\n"
+        f"## Recommendations or Limitations\n"
+        f"Review the complete original imaging study and contiguous slices, and supplement the result with quantitative metrics or specialist interpretation when needed. "
+        f"A diagnosis should not be established solely from the automated output."
     )
 
 def _parse_json_response(raw: str) -> dict:

@@ -22,11 +22,18 @@ def get_client() -> chromadb.HttpClient:
 
 
 def _get_collection(name: str):
-    return get_client().get_or_create_collection(
-        name=name,
-        embedding_function=_ef,
-        metadata={"hnsw:space": "cosine"},
-    )
+    client = get_client()
+    try:
+        return client.get_collection(name=name, embedding_function=_ef)
+    except Exception as e:
+        msg = str(e).lower()
+        if "does not exist" not in msg and "not found" not in msg:
+            raise
+        return client.create_collection(
+            name=name,
+            embedding_function=_ef,
+            metadata={"hnsw:space": "cosine"},
+        )
 
 
 def upsert_model(model_id: str, text: str, metadata: dict) -> None:
