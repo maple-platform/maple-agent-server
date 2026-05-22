@@ -1,6 +1,10 @@
 # MARS AI Agent Wiki Index
 
 ## Models
+- [[nnUNet SMWI Segmentation/nnUNet_SMWI]] - Neurology
+- [[Parkinson Gait/ParkinsonGait]] - Neurology
+- [[BME Classification/GradCAM++]] - Rheumatology
+- [[SI Joints Detection/YOLOv12]] - Rheumatology
 - [[nnUNet_SMWI]] - Neurology/nnUNet SMWI Segmentation
 - [[ParkinsonGait]] - Neurology/Parkinson Gait
 - [[GradCAM++]] - Rheumatology/BME Classification

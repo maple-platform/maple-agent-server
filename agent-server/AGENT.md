@@ -1,35 +1,35 @@
-# MARS AI Agent
+# maple-agent-server
 
-MARS AI 플랫폼의 AI Agent 서버입니다.
-백엔드(MARS_AI_Back-end, Port 8000)로부터 추론 요청을 받아 모델 실행 계획을 수립하고,
+maple-platform의 AI Agent 서버입니다.
+백엔드(maple-routing-server, Port 8000)로부터 추론 요청을 받아 모델 실행 계획을 수립하고,
 AI 모델 추론 결과를 임상적으로 해석하며, 의학 지식 질문에 답변합니다.
 
 ---
 
 ## 시스템 구성
 
-MARS AI 플랫폼은 세 개의 독립적인 서버로 구성됩니다.
+maple-platform은 세 개의 독립적인 서버로 구성됩니다.
 
 ```
-[Frontend UI]  mars-agent-v2 (React, Port 3000)
+[Frontend UI]  maple-client (React, Port 3000)
       │
       │  HTTP
       ▼
-[Back-end]     MARS_AI_Back-end (FastAPI, Port 8000)
+[Back-end]     maple-routing-server (FastAPI, Port 8000)
       │
       │  HTTP (SSH터널 → localhost:8001)
       ▼
-[AI Agent]     MARS_AI_Agent (NHN Cloud B200, Port 8001)    ◄── 이 저장소
-               ├── Ollama (Port 11434, gemma4:31b)
+[AI Agent]     maple-agent-server (NHN Cloud B200, Port 8001)    ◄── 이 저장소
+               ├── vLLM (Port 8003, gemma-4-31B-it, B200 ×2 텐서 병렬)
                ├── ChromaDB (Port 8002, RAG)
                └── /wiki (LLM Wiki, 지식 누적)
 ```
 
 | 서버 | 저장소 | 포트 | 역할 |
 |---|---|---|---|
-| Back-end | `MARS_AI_Back-end` | 8000 | 추론 라우팅, 프로젝트 관리, 결과 저장, 파일 변환 |
-| **AI Agent** | **`MARS_AI_Agent`** | **NHN Cloud B200:8001 (SSH터널 → localhost:8001)** | **모드별 쿼리 라우팅, RAG 임상 해석, 모델 검색, VLM 범용 분석** |
-| Frontend | `mars-agent-v2` | 3000 | 사용자 인터페이스 |
+| Back-end | `maple-routing-server` | 8000 | 추론 라우팅, 프로젝트 관리, 결과 저장, 파일 변환 |
+| **AI Agent** | **`maple-agent-server`** | **NHN Cloud B200:8001 (SSH터널 → localhost:8001)** | **모드별 쿼리 라우팅, RAG 임상 해석, 모델 검색, VLM 범용 분석** |
+| Frontend | `maple-client` | 3000 | 사용자 인터페이스 |
 
 ---
 
@@ -40,10 +40,10 @@ MARS AI 플랫폼은 세 개의 독립적인 서버로 구성됩니다.
 | **웹 프레임워크** | FastAPI | 0.115.0 | Agent API 서버 |
 | | Uvicorn | 0.30.6 | ASGI 서버 |
 | | Pydantic | 2.9.2 | 요청/응답 스키마 검증 |
-| **LLM / VLM** | Ollama (gemma4:31b) | - | 임상 해석 생성, 범용 멀티모달 분석 |
+| **LLM / VLM** | vLLM + gemma-4-31B-it | - | 임상 해석 생성, 범용 멀티모달 분석 |
 | **벡터 DB** | ChromaDB | 0.5.20 | 모델 레지스트리 + 논문/QA RAG 검색 |
 | **임베딩** | sentence-transformers | 3.2.1 | 모델 설명·논문 벡터화 (`all-MiniLM-L6-v2`) |
-| **HTTP 클라이언트** | httpx | 0.27.2 | Ollama 비동기 호출 |
+| **HTTP 클라이언트** | httpx | 0.27.2 | vLLM OpenAI 호환 API 비동기 호출 |
 | **Wiki** | 마크다운 파일 (`/wiki`) | - | 모델 메타데이터·임상 해석 패턴 누적 |
 
 ---
@@ -59,8 +59,8 @@ MARS AI 플랫폼은 세 개의 독립적인 서버로 구성됩니다.
 | 레이어 | 담당 | 저장소 |
 |---|---|---|
 | **Wiki** | AI 모델 메타데이터, 핵심 의학 개념, 임상 해석 패턴 누적 | `/wiki/*.md` |
-| **RAG** | PubMedQA·MedMCQA 대용량 논문/QA 검색 | ChromaDB (`mars_knowledge`) |
-| **모델 레지스트리** | 등록된 AI 모델 검색 | ChromaDB (`mars_models`) |
+| **RAG** | PubMedQA·MedMCQA 대용량 논문/QA 검색 | ChromaDB (`maple_knowledge`) |
+| **모델 레지스트리** | 등록된 AI 모델 검색 | ChromaDB (`maple_models`) |
 
 ### 쿼리 처리 흐름
 
@@ -71,7 +71,7 @@ MARS AI 플랫폼은 세 개의 독립적인 서버로 구성됩니다.
     ↓
 2. (필요시) RAG → ChromaDB에서 논문/QA 검색 보완
     ↓
-3. Gemma4:31b → Wiki + RAG 결과 합쳐서 응답 생성
+3. gemma-4-31B-it → Wiki + RAG 결과 합쳐서 응답 생성
     ↓
 4. 좋은 응답/분석 → Wiki에 파일링 (지식 누적)
 ```
@@ -81,7 +81,7 @@ MARS AI 플랫폼은 세 개의 독립적인 서버로 구성됩니다.
 ## 폴더 구조
 
 ```
-mars-ai-agent/
+agent-server/
 ├── main.py                    # FastAPI 앱 진입점 (Port 8001)
 ├── requirements.txt
 ├── .env
@@ -101,7 +101,7 @@ mars-ai-agent/
 │   └── rag_service.py         # ChromaDB RAG 검색 래퍼
 │
 ├── llm/
-│   ├── client.py              # Ollama 비동기 클라이언트 (generate / generate_with_images)
+│   ├── client.py              # vLLM OpenAI 호환 비동기 클라이언트 (generate / generate_with_images)
 │   └── prompts.py             # 프롬프트 템플릿
 │
 ├── rag/
@@ -136,7 +136,7 @@ mars-ai-agent/
 
 | Method | Endpoint | 설명 |
 |---|---|---|
-| `GET` | `/health` | 헬스체크 (Ollama + ChromaDB 연결 상태 포함) |
+| `GET` | `/health` | 헬스체크 (vLLM + ChromaDB 연결 상태 포함) |
 
 ---
 
@@ -170,9 +170,9 @@ mars-ai-agent/
 
 | mode | Agent 처리 |
 |---|---|
-| `prediction` | ChromaDB `mars_models` 검색 → required_data 매칭 → 실행 계획 반환 |
+| `prediction` | ChromaDB `maple_models` 검색 → required_data 매칭 → 실행 계획 반환 |
 | `clinical` | Wiki + RAG(PubMedQA·MedMCQA) 검색 → LLM 즉시 답변 |
-| `general` | 이미지(VLM) + CSV 수치 데이터 → Gemma4 종합 분석 |
+| `general` | 이미지(VLM) + CSV 수치 데이터 → gemma-4-31B-it 종합 분석 |
 | `auto` | `images` / `csv_data` 있으면 `general`로 분기; 없으면 LLM이 쿼리 분석 후 `execution` / `knowledge` / `general` 중 판단 |
 
 **Response — prediction 모드**
@@ -351,7 +351,7 @@ LLM 판단 결과에 따라 `prediction` / `clinical` / `general` 응답 형식 
 2. `wiki/departments/Rheumatology.md` 업데이트
 3. `wiki/index.md` 업데이트
 4. `wiki/log.md`에 이력 추가
-5. ChromaDB `mars_models` 컬렉션에 등록
+5. ChromaDB `maple_models` 컬렉션에 등록
 
 **Response**
 
@@ -382,7 +382,7 @@ LLM 판단 결과에 따라 `prediction` / `clinical` / `general` 응답 형식 
 1. `wiki/models/YOLOv12.md` 삭제
 2. `wiki/index.md`에서 해당 항목 제거
 3. `wiki/log.md`에 이력 추가
-4. ChromaDB `mars_models`에서 제거
+4. ChromaDB `maple_models`에서 제거
 
 ---
 
@@ -409,17 +409,17 @@ LLM 판단 결과에 따라 `prediction` / `clinical` / `general` 응답 형식 
 ```json
 {
   "status": "ok",
-  "service": "mars-ai-agent",
-  "ollama": "ok",
+  "service": "maple-agent-server",
+  "vllm": "ok",
   "chromadb": "ok",
-  "model": "gemma4:31b"
+  "model": "google/gemma-4-31B-it"
 }
 ```
 
 | 필드 | 값 |
 |---|---|
-| `status` | `ok` (Ollama + ChromaDB 모두 정상) \| `degraded` (하나 이상 불가) |
-| `ollama` | `ok` \| `unavailable` |
+| `status` | `ok` (vLLM + ChromaDB 모두 정상) \| `degraded` (하나 이상 불가) |
+| `vllm` | `ok` \| `unavailable` |
 | `chromadb` | `ok` \| `unavailable` |
 | `model` | 현재 설정된 LLM 모델명 |
 
@@ -459,7 +459,7 @@ LLM 판단 결과에 따라 `prediction` / `clinical` / `general` 응답 형식 
 ```
 POST /agent/plan {mode: "prediction", query, uploaded_types}
     ↓
-Agent: ChromaDB mars_models에서 쿼리와 관련된 모델 검색 (최대 5개)
+Agent: ChromaDB maple_models에서 쿼리와 관련된 모델 검색 (최대 5개)
        유사도 점수 0.40 미만 제거
        모델의 required_data와 uploaded_types 매칭
     ↓
@@ -488,7 +488,7 @@ Agent: 관련 모델 Wiki 페이지 수집 (최대 600자)
 POST /agent/plan {mode: "clinical", query}
     ↓
 Agent: wiki_service.search_wiki(query) — 키워드 매칭, 최대 3개 페이지 반환
-       rag_service.retrieve(query) — ChromaDB mars_models(3개) + mars_knowledge(5개) 검색
+       rag_service.retrieve(query) — ChromaDB maple_models(3개) + maple_knowledge(5개) 검색
        LLM으로 임상 답변 생성
     ↓
 ← {query_type: "knowledge", mode: "clinical", message, sources, model_suggestion} 반환
@@ -526,7 +526,7 @@ Agent: request에 images / csv_data가 있으면 → general 분기
 ### index.md 형식
 
 ```markdown
-# MARS AI Agent Wiki Index
+# maple-agent-server Wiki Index
 
 ## Models
 - [[YOLOv12]] - Rheumatology/SI Joints Detection
@@ -585,9 +585,9 @@ axSpA, 강직성 척추염
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
-| `OLLAMA_URL` | `http://localhost:11434` | Ollama 서버 URL |
-| `LLM_MODEL` | `gemma4:31b` | 텍스트 생성 모델명 |
-| `VLM_MODEL` | `gemma4:31b` | 이미지 포함 VLM 모델명 (기본값은 LLM_MODEL과 동일) |
+| `LLM_BASE_URL` | `http://localhost:8003/v1` | vLLM OpenAI 호환 API URL |
+| `LLM_MODEL` | `google/gemma-4-31B-it` | 텍스트 생성 모델명 |
+| `VLM_MODEL` | `google/gemma-4-31B-it` | 이미지 포함 VLM 모델명 (기본값은 LLM_MODEL과 동일) |
 | `CHROMA_HOST` | `localhost` | ChromaDB 호스트 |
 | `CHROMA_PORT` | `8002` | ChromaDB 포트 |
 | `WIKI_PATH` | `./wiki` | Wiki 마크다운 파일 경로 |
@@ -598,7 +598,7 @@ axSpA, 강직성 척추염
 
 **사전 요구사항**
 - Python 3.10+
-- Ollama (`localhost:11434`, `gemma4:31b` 모델 pull 완료)
+- vLLM 0.20.0+ (`localhost:8003`, `google/gemma-4-31B-it`, B200 ×2 텐서 병렬)
 - ChromaDB (`localhost:8002`)
 
 ```bash
@@ -640,16 +640,16 @@ python scripts/ingest_knowledge.py
 
 ---
 
-### Ollama 모델 미설치
+### vLLM 모델 미설치 / 아키텍처 인식 불가
 
 ```
-404 model not found
+model type `gemma4` but Transformers does not recognize this architecture
 ```
 
-Ollama에 `gemma4:31b` 모델이 pull되어 있지 않은 경우입니다.
+transformers 버전이 낮습니다.
 
 ```bash
-ollama pull gemma4:31b
+pip install --upgrade transformers
 ```
 
 ---
@@ -694,5 +694,5 @@ Agent는 다음 조건을 만족하지 못하면 자동으로 재생성을 시�
 - 문장 수 4개 미만
 
 재시도 후에도 품질이 부족하면 서버 측 폴백 텍스트를 반환합니다.
-Ollama 타임아웃 (`generate`: 120초, `generate_with_images`: 180초)이 너무 짧은 경우,
+vLLM 타임아웃 (`generate`: 120초, `generate_with_images`: 180초)이 너무 짧은 경우,
 `llm/client.py`의 `timeout` 값을 늘리는 것을 고려하세요.

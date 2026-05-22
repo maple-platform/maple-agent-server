@@ -142,3 +142,12 @@
 ## [2026-05-08] interpret | BME Classification/GradCAM++ 결과 해석 완료
 ## [2026-05-08] interpret | SI Joints Detection/YOLOv12 결과 해석 완료
 ## [2026-05-08] interpret | BME Classification/GradCAM++ 결과 해석 완료
+## [2026-05-19] interpret | SI Joints Detection/YOLOv12 결과 해석 완료
+## [2026-05-19] interpret | BME Classification/GradCAM++ 결과 해석 완료
+## [2026-05-19] ingest | YOLOv12 모델 등록
+## [2026-05-19] ingest | GradCAM++ 모델 등록
+## [2026-05-19] ingest | ParkinsonGait 모델 등록
+## [2026-05-19] ingest | nnUNet_SMWI 모델 등록
+## [2026-05-19] interpret | SI Joints Detection/YOLOv12 결과 해석 완료
+## [2026-05-19] interpret | SI Joints Detection/YOLOv12 결과 해석 완료
+## [2026-05-19] interpret | BME Classification/GradCAM++ 결과 해석 완료
