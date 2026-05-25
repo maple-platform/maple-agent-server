@@ -12,9 +12,9 @@
         │
         │  HTTP
         ▼
-[maple-routing-server] FastAPI 백엔드 (Port 8000)
+[maple-routing-server] FastAPI 백엔드 (Port 8100)
         │
-        ├── HTTP ──────► [maple-model-execution-server] AI 모델 컨테이너 (Port 9001~9004)
+        ├── HTTP ──────► [maple-model-execution-server] AI 모델 컨테이너 (Port 9020~9023)
         │
         └── SSH 터널 ──► [maple-agent-server] AI Agent (NHN Cloud B200, Port 8101)  ◄── 이 저장소
                                 ├── vLLM  (Port 8003, gemma-4-31B-it, B200 ×2 텐서 병렬)
