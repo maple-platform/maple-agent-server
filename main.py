@@ -11,7 +11,7 @@ from routers import agent, models
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     import logging
-    logger = logging.getLogger("mars-ai-agent")
+    logger = logging.getLogger("maple-ai-agent")
 
     from llm.client import is_available as llm_ok
     from rag.embedder import get_client as chroma_client
@@ -31,8 +31,8 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(
-    title="MARS AI Agent",
-    description="MARS AI 플랫폼 AI Agent 서버 - 임상 해석 및 모델 실행 계획 수립",
+    title="Maple AI Agent",
+    description="Maple AI 플랫폼 AI Agent 서버 - 임상 해석 및 모델 실행 계획 수립",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -67,7 +67,7 @@ async def health():
 
     return {
         "status": overall,
-        "service": "mars-ai-agent",
+        "service": "maple-ai-agent",
         "vllm": llm_status,
         "chromadb": chroma_status,
         "model": os.getenv("LLM_MODEL", "google/gemma-4-31B-it"),
@@ -76,4 +76,4 @@ async def health():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8101, reload=True)

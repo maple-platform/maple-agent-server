@@ -1,10 +1,10 @@
 # Neurology
 
 ## 모델 목록
-- [[ParkinsonGait]] - Parkinson Gait
+- [[BraTS2020_FLAIR_UNet3D/BraTS2020_FLAIR_UNet3D]]
 
-- [[nnUNet_SMWI]] - nnUNet SMWI Segmentation
+- [[BraTS2020_T1_UNet3D/BraTS2020_T1_UNet3D]]
 
-- [[Parkinson Gait/ParkinsonGait]]
+- [[BraTS2020_T1ce_UNet3D/BraTS2020_T1ce_UNet3D]]
 
-- [[nnUNet SMWI Segmentation/nnUNet_SMWI]]
+- [[BraTS2020_T2_UNet3D/BraTS2020_T2_UNet3D]]

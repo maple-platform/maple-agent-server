@@ -37,13 +37,13 @@ def _get_collection(name: str):
 
 
 def upsert_model(model_id: str, text: str, metadata: dict) -> None:
-    col = _get_collection("mars_models")
+    col = _get_collection("maple_models")
     col.upsert(ids=[model_id], documents=[text], metadatas=[metadata])
 
 
 def get_model_name(model_id: str) -> str | None:
     """model_id로 ChromaDB에서 model_name 역조회"""
-    col = _get_collection("mars_models")
+    col = _get_collection("maple_models")
     result = col.get(ids=[model_id], include=["metadatas"])
     if result["ids"]:
         return result["metadatas"][0].get("model_name")
@@ -51,10 +51,7 @@ def get_model_name(model_id: str) -> str | None:
 
 
 def delete_model(model_id: str) -> None:
-    col = _get_collection("mars_models")
+    col = _get_collection("maple_models")
     col.delete(ids=[model_id])
 
 
-def upsert_knowledge(doc_id: str, text: str, metadata: dict) -> None:
-    col = _get_collection("mars_knowledge")
-    col.upsert(ids=[doc_id], documents=[text], metadatas=[metadata])

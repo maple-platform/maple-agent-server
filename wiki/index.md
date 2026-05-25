@@ -1,20 +1,17 @@
-# MARS AI Agent Wiki Index
+# MAPLE AI Agent Wiki Index
 
 ## Models
-- [[nnUNet SMWI Segmentation/nnUNet_SMWI]] - Neurology
-- [[Parkinson Gait/ParkinsonGait]] - Neurology
-- [[BME Classification/GradCAM++]] - Rheumatology
-- [[SI Joints Detection/YOLOv12]] - Rheumatology
-- [[nnUNet_SMWI]] - Neurology/nnUNet SMWI Segmentation
-- [[ParkinsonGait]] - Neurology/Parkinson Gait
-- [[GradCAM++]] - Rheumatology/BME Classification
-- [[YOLOv12]] - Rheumatology/SI Joints Detection
+- [[RSNA_Pneumonia_YOLO26x/YOLO26x_RSNA_Pneumonia]] - Radiology
+- [[ChestXray14_Multilabel_Classification/ChestXray14_Multilabel_Classification]] - Radiology
+- [[BraTS2020_T2_UNet3D/BraTS2020_T2_UNet3D]] - Neurology
+- [[BraTS2020_T1ce_UNet3D/BraTS2020_T1ce_UNet3D]] - Neurology
+- [[BraTS2020_T1_UNet3D/BraTS2020_T1_UNet3D]] - Neurology
+- [[BraTS2020_FLAIR_UNet3D/BraTS2020_FLAIR_UNet3D]] - Neurology
+
 
 ## Departments
-- [[Neurology]] - nnUNet SMWI Segmentation
-- [[Neurology]] - Parkinson Gait
-- [[Rheumatology]] - BME Classification
-- [[Rheumatology]] - SI Joints Detection
+- [[Radiology]]
+- [[Neurology]] 
 
 ## Concepts
 

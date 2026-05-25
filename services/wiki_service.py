@@ -21,11 +21,6 @@ def _interp_dir(project: str, model_name: str) -> Path:
 
 # ── 읽기 ──────────────────────────────────────────────────────────────────────
 
-def read_index() -> str:
-    p = WIKI_PATH / "index.md"
-    return p.read_text(encoding="utf-8") if p.exists() else ""
-
-
 def read_model_page(project: str, model_name: str) -> str:
     p = _model_path(project, model_name)
     return p.read_text(encoding="utf-8") if p.exists() else ""
@@ -48,11 +43,6 @@ def read_all_models() -> list[dict]:
         for f in d.rglob("*.md")
         if len(f.relative_to(d).parts) == 2
     ]
-
-
-def read_all_model_names() -> list[str]:
-    """하위 호환용. model_name 목록만 반환."""
-    return [m["model_name"] for m in read_all_models()]
 
 
 def resolve_model(name: str) -> tuple[str, str] | None:

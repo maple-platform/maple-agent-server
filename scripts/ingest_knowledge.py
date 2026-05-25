@@ -1,5 +1,5 @@
 """
-PubMedQA + MedMCQA 데이터를 ChromaDB mars_knowledge 컬렉션에 ingest.
+PubMedQA + MedMCQA 데이터를 ChromaDB maple_knowledge 컬렉션에 ingest.
 
 사용법:
     python scripts/ingest_knowledge.py [--pubmedqa N] [--medmcqa N]
@@ -39,7 +39,7 @@ _ef = embedding_functions.SentenceTransformerEmbeddingFunction(
 def get_collection():
     client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
     return client.get_or_create_collection(
-        name="mars_knowledge",
+        name="maple_knowledge",
         embedding_function=_ef,
         metadata={"hnsw:space": "cosine"},
     )
@@ -168,13 +168,13 @@ def main():
     else:
         print(f"ChromaDB 연결: {CHROMA_HOST}:{CHROMA_PORT}")
         col = get_collection()
-        print(f"컬렉션 'mars_knowledge' 준비 완료. 현재 doc 수: {col.count()}")
+        print(f"컬렉션 'maple_knowledge' 준비 완료. 현재 doc 수: {col.count()}")
 
     ingest_pubmedqa(col, args.pubmedqa, args.batch, args.dry_run)
     ingest_medmcqa(col, args.medmcqa, args.batch, args.dry_run)
 
     if not args.dry_run:
-        print(f"\n완료. mars_knowledge 총 doc 수: {col.count()}")
+        print(f"\n완료. maple_knowledge 총 doc 수: {col.count()}")
 
 
 if __name__ == "__main__":

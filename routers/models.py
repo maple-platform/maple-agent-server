@@ -43,7 +43,7 @@ async def register_model(req: ModelRegisterRequest):
     # 4. log.md 이력 추가
     wiki_service.append_log("ingest", f"{req.model_name} 모델 등록")
 
-    # 5. ChromaDB mars_models 컬렉션에 등록
+    # 5. ChromaDB maple_models 컬렉션에 등록
     doc_text = (
         f"모델명: {req.model_name}\n"
         f"진료과: {req.department}\n"
@@ -77,7 +77,7 @@ async def register_model(req: ModelRegisterRequest):
 
 @router.delete("/{model_id}")
 async def delete_model(model_id: str):
-    col = embedder._get_collection("mars_models")
+    col = embedder._get_collection("maple_models")
     result = col.get(ids=[model_id], include=["metadatas"])
     if not result["ids"]:
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found in registry")

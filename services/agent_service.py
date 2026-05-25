@@ -19,7 +19,7 @@ from llm.prompts import (
 )
 from llm.prompts.utils import sort_image_roles
 
-logger = logging.getLogger("mars-ai-agent")
+logger = logging.getLogger("maple-ai-agent")
 
 
 async def plan(
@@ -346,7 +346,7 @@ async def _auto(
     else:
         sources = []
         for r in (model_results + knowledge_results):
-            src = "wiki" if r["source"] == "mars_models" else "pubmedqa"
+            src = "wiki" if r["source"] == "maple_models" else "pubmedqa"
             sources.append({"source": src, "text": r["text"][:80], "score": r["score"]})
         return {
             "query_type": "knowledge",

@@ -1,16 +1,16 @@
-from rag.embedder import _get_collection, _ef
+from rag.embedder import _get_collection
 
 
 def search_models(query: str, n_results: int = 3) -> list[dict]:
-    col = _get_collection("mars_models")
+    col = _get_collection("maple_models")
     results = col.query(query_texts=[query], n_results=n_results)
-    return _format_results(results, source="mars_models")
+    return _format_results(results, source="maple_models")
 
 
 def search_knowledge(query: str, n_results: int = 5) -> list[dict]:
-    col = _get_collection("mars_knowledge")
+    col = _get_collection("maple_knowledge")
     results = col.query(query_texts=[query], n_results=n_results)
-    return _format_results(results, source="mars_knowledge")
+    return _format_results(results, source="maple_knowledge")
 
 
 def _format_results(results: dict, source: str) -> list[dict]:

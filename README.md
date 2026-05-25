@@ -16,7 +16,7 @@
         │
         ├── HTTP ──────► [maple-model-execution-server] AI 모델 컨테이너 (Port 9001~9004)
         │
-        └── SSH 터널 ──► [maple-agent-server] AI Agent (NHN Cloud B200, Port 8001)  ◄── 이 저장소
+        └── SSH 터널 ──► [maple-agent-server] AI Agent (NHN Cloud B200, Port 8101)  ◄── 이 저장소
                                 ├── vLLM  (Port 8003, gemma-4-31B-it, B200 ×2 텐서 병렬)
                                 ├── ChromaDB  (Port 8002, 벡터 RAG)
                                 └── /wiki  (마크다운 지식 누적 레이어)
@@ -70,20 +70,20 @@ gemma-4-31B-it → 임상 응답 생성
 단일 요청으로 복수의 특화 모델이 순차 실행되는 파이프라인을 지원합니다.
 
 ```
-예시: BME Classification
-  Step 1 — YOLOv12      : MRI에서 SI 관절 ROI 탐지
-  Step 2 — GradCAM++    : ROI 기반 BME 분류 + 히트맵 생성
-  최종    — VLM 임상 해석 : 결과 이미지 + 예측값 → 임상 소견 텍스트 생성
+예시: 뇌종양 분할
+  Step 1 — BraTS2020_FLAIR_UNet3D : FLAIR MRI에서 뇌종양 영역 분할
+  Step 2 — BraTS2020_T1ce_UNet3D  : T1ce MRI에서 Enhancing Tumor 분할
+  최종    — VLM 임상 해석           : 분할 결과 이미지 → 임상 소견 텍스트 생성
 ```
 
 ### 4. VLM 임상 해석 with 이미지 인라인 렌더링
 
 ```
 Agent 해석 출력:
-  "좌측 SI 관절에 BME 소견이 확인됩니다 [IMG:gradcam_overlay] 우측은 정상 범위..."
+  "우측 전두엽에 Whole Tumor 소견이 확인됩니다 [IMG:seg_overlay] Enhancing Tumor 영역은..."
 
 프론트엔드:
-  [IMG:gradcam_overlay] 토큰을 GradCAM 이미지로 인라인 치환하여 렌더링
+  [IMG:seg_overlay] 토큰을 분할 결과 이미지로 인라인 치환하여 렌더링
 ```
 
 ---
@@ -96,7 +96,7 @@ Agent 해석 출력:
 | **벡터 DB** | ChromaDB 0.5 | 모델 레지스트리 + 임상 논문 RAG |
 | **임베딩** | sentence-transformers `all-MiniLM-L6-v2` | 쿼리·모델 설명 벡터화 |
 | **AI 프레임워크** | FastAPI + asyncio | 전구간 비동기, 병렬 RAG 검색 |
-| **특화 모델** | YOLOv12, GradCAM++, nnUNet, Parkinson Gait ML | Docker 컨테이너 격리 실행 |
+| **특화 모델** | UNet3D(BraTS), YOLO26x(RSNA), ChestXray14 | Docker 컨테이너 격리 실행 |
 | **프론트엔드** | React 19 + TypeScript + Electron | 웹/데스크탑 듀얼 빌드 |
 | **백엔드** | FastAPI + Motor(MongoDB) + httpx | 비동기 DB, 비동기 컨테이너 호출 |
 | **파일 처리** | pydicom, nibabel, Pillow | DICOM·NIfTI → PNG 변환, base64 인코딩 |
@@ -107,10 +107,12 @@ Agent 해석 출력:
 
 | 모델 | 진료과 | 입력 | 출력 | 기술 |
 |---|---|---|---|---|
-| YOLOv12 | 류마티올로지 | DICOM | SI 관절 ROI 이미지 | Object Detection |
-| GradCAM++ | 류마티올로지 | DICOM + ROI | BME 분류 + 히트맵 | Classification + XAI |
-| Parkinson Gait ML | 신경과 | CSV (Gait 데이터) | 낙상 위험도 | Tabular ML |
-| nnUNet SMWI | 신경과 | NIfTI | 뇌 구조 분할 | 3D Segmentation |
+| BraTS2020_FLAIR_UNet3D | 신경과 | NIfTI (FLAIR) | 뇌종양 분할 오버레이 | 3D Segmentation |
+| BraTS2020_T1_UNet3D | 신경과 | NIfTI (T1) | 뇌종양 분할 오버레이 | 3D Segmentation |
+| BraTS2020_T1ce_UNet3D | 신경과 | NIfTI (T1ce) | 뇌종양 분할 오버레이 | 3D Segmentation |
+| BraTS2020_T2_UNet3D | 신경과 | NIfTI (T2) | 뇌종양 분할 오버레이 | 3D Segmentation |
+| ChestXray14_Multilabel_Classification | 영상의학과 | PNG/JPG | GradCAM 오버레이 + 14개 흉부 소견 확률 | Classification + XAI |
+| YOLO26x_RSNA_Pneumonia | 영상의학과 | DICOM | 폐렴 의심 영역 bbox 오버레이 | Object Detection |
 
 ---
 
@@ -118,7 +120,7 @@ Agent 해석 출력:
 
 ```
 maple-agent-server/
-├── main.py                 # FastAPI 진입점 (Port 8001)
+├── main.py                 # FastAPI 진입점 (Port 8101)
 ├── requirements.txt
 ├── .env.example
 ├── wiki/                   # 지식 누적 레이어
@@ -159,7 +161,7 @@ python -m vllm.entrypoints.openai.api_server \
   --max-model-len 8192
 
 # 터미널 3 — Agent 서버
-uvicorn main:app --host 0.0.0.0 --port 8001 --reload
+uvicorn main:app --host 0.0.0.0 --port 8101 --reload
 ```
 
 > 최초 실행 시: `python scripts/ingest_knowledge.py` (ChromaDB 임상 지식 초기화)
@@ -289,18 +291,18 @@ uvicorn main:app --host 0.0.0.0 --port 8001 --reload
 
 ```json
 {
-  "id": "yolov12-si-joint-001",
-  "model_name": "YOLOv12",
-  "department": "Rheumatology",
-  "project": "SI Joints Detection",
-  "description": "Sacrum MRI에서 좌우 SI 관절 ROI 탐지",
-  "task_type": "detection",
+  "id": "radiology-rsna-pneumonia-yolo26x",
+  "model_name": "YOLO26x_RSNA_Pneumonia",
+  "department": "Radiology",
+  "project": "RSNA_Pneumonia_YOLO26x",
+  "description": "폐렴성 폐 혼탁 탐지 모델. DICOM 흉부 X-ray를 입력받아 폐렴 의심 영역을 bounding box로 검출",
+  "task_type": "bbox detection",
   "required_data": ["dicom"],
   "result_type": "image"
 }
 ```
 
-→ `wiki/models/YOLOv12.md` 생성 + `wiki/index.md` 업데이트 + ChromaDB `maple_models` 등록 자동 수행
+→ `wiki/models/RSNA_Pneumonia_YOLO26x/YOLO26x_RSNA_Pneumonia.md` 생성 + `wiki/index.md` 업데이트 + ChromaDB `maple_models` 등록 자동 수행
 
 ---
 

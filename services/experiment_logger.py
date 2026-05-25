@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import Any
 
 
-logger = logging.getLogger("mars-ai-agent")
+logger = logging.getLogger("maple-ai-agent")
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_DEFAULT_LOG_PATH = _REPO_ROOT / "experiments" / "runs" / "mars_platform.jsonl"
+_DEFAULT_LOG_PATH = _REPO_ROOT / "experiments" / "runs" / "maple_platform.jsonl"
 _RUN_JOIN_WINDOW = timedelta(minutes=2)
 
 
@@ -137,13 +137,13 @@ def _run_summary(run: dict[str, Any]) -> dict[str, Any]:
 
 def _excel_fields(summary: dict[str, Any]) -> dict[str, Any]:
     return {
-        "mars_status": summary.get("final_status"),
-        "mars_selected_model": summary.get("selected_model"),
+        "maple_status": summary.get("final_status"),
+        "maple_selected_model": summary.get("selected_model"),
         # Manual review fields: leave blank on purpose for the RSNA QI worksheet.
-        "mars_correct": "",
-        "mars_total_latency_sec": summary.get("total_latency_sec"),
-        "mars_quant_included": "",
-        "mars_xai_included": "",
+        "maple_correct": "",
+        "maple_total_latency_sec": summary.get("total_latency_sec"),
+        "maple_quant_included": "",
+        "maple_xai_included": "",
     }
 
 
