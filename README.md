@@ -27,7 +27,7 @@
 | `maple-client` | 채팅 UI, 추론 결과 시각화 (React + Electron) |
 | `maple-routing-server` | 요청 라우팅, AI 컨테이너 오케스트레이션, 결과 저장 |
 | **`maple-agent-server`** | **쿼리 분류, RAG 임상 해석, 모델 검색, VLM 분석** |
-| `maple-model-execution-server` | 도메인 특화 AI 모델 컨테이너 (YOLOv12, GradCAM++, nnUNet 등) |
+| `maple-model-execution-server` | 도메인 특화 AI 모델 컨테이너 (UNet3D, YOLO26x, ChestXray14 등) |
 
 ---
 
@@ -202,7 +202,7 @@ python scan_and_register.py
 
 ```json
 {
-  "query": "천장관절 Detection 해줘",
+  "query": "흉부 X-ray 폐렴 탐지 해줘",
   "mode": "auto",
   "uploaded_types": ["dicom"],
   "history": [],
@@ -236,7 +236,7 @@ python scan_and_register.py
   "status": "ready",
   "mode": "prediction",
   "execution_plan": {
-    "steps": [{"step": 1, "model": "YOLOv12", "department": "Rheumatology", "project": "SI Joints Detection"}]
+    "steps": [{"step": 1, "model": "YOLO26x_RSNA_Pneumonia", "department": "Radiology", "project": "RSNA_Pneumonia_YOLO26x"}]
   }
 }
 
@@ -247,7 +247,7 @@ python scan_and_register.py
 {"status": "no_model", "mode": "prediction", "message": "..."}
 
 // prediction — 파일 타입 불일치
-{"status": "type_mismatch", "mismatched_models": [{"model": "YOLOv12", "required": ["dicom"], "uploaded": ["csv"]}]}
+{"status": "type_mismatch", "mismatched_models": [{"model": "YOLO26x_RSNA_Pneumonia", "required": ["dicom"], "uploaded": ["csv"]}]}
 
 // clinical
 {"query_type": "knowledge", "mode": "clinical", "message": "...", "sources": [...], "model_suggestion": "..."}
@@ -262,16 +262,16 @@ python scan_and_register.py
 
 ```json
 {
-  "query": "BME Classification 해줘",
-  "task": {"department": "Rheumatology", "project": "BME Classification"},
+  "query": "흉부 X-ray 폐렴 탐지 해줘",
+  "task": {"department": "Radiology", "project": "RSNA_Pneumonia_YOLO26x"},
   "execution_context": {"mode": "prediction", "plan": {}},
   "step_results": [
     {
       "step": 1,
-      "model": "GradCAM++",
+      "model": "YOLO26x_RSNA_Pneumonia",
       "result_type": "image",
-      "predictions": {"left": {"prob": 0.94, "pred": 1}, "right": {"prob": 0.65, "pred": 1}},
-      "images": [{"role": "gradcam_overlay", "data": "data:image/png;base64,..."}]
+      "predictions": {"confidence": 0.87, "boxes": 2},
+      "images": [{"role": "bbox_overlay", "data": "data:image/png;base64,..."}]
     }
   ]
 }
@@ -281,9 +281,9 @@ python scan_and_register.py
 
 ```json
 {
-  "interpretation": "## 전체 요약\n좌측 SI관절에 BME가 확인되었으며...\n\n[IMG:gradcam_overlay]",
-  "interpretation_raw": "## 전체 요약\n좌측 SI관절에 BME가 확인되었으며...\n\n[IMG:gradcam_overlay]",
-  "images": {"gradcam_overlay": "data:image/png;base64,..."}
+  "interpretation": "## 전체 요약\n우측 하엽에 폐렴 의심 혼탁 소견이 확인되었으며...\n\n[IMG:bbox_overlay]",
+  "interpretation_raw": "## 전체 요약\n우측 하엽에 폐렴 의심 혼탁 소견이 확인되었으며...\n\n[IMG:bbox_overlay]",
+  "images": {"bbox_overlay": "data:image/png;base64,..."}
 }
 ```
 
@@ -361,13 +361,13 @@ POST /agent/plan {mode: "general", query, images, csv_data}
 # Maple AI Agent Wiki Index
 
 ## Models
-- [[YOLOv12]] - Rheumatology/SI Joints Detection
+- [[RSNA_Pneumonia_YOLO26x/YOLO26x_RSNA_Pneumonia]] - Radiology
 
 ## Departments
-- [[Rheumatology]] - SI Joints Detection
+- [[Radiology]]
 
 ## Interpretations
-- [[BME_pattern_001]] - 좌측 BME 고확률 패턴
+- [[RSNA_Pneumonia_YOLO26x/YOLO26x_RSNA_Pneumonia/20260525_...]]
 ```
 
 ### 모델 페이지 (`wiki/models/ModelName.md`)
@@ -376,8 +376,8 @@ POST /agent/plan {mode: "general", query, images, csv_data}
 # ModelName
 
 ## 기본 정보
-- **진료과:** Rheumatology
-- **task_type:** detection
+- **진료과:** Radiology
+- **task_type:** bbox detection
 - **required_data:** [dicom]
 
 ## 임상 해석 패턴
