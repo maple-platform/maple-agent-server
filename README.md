@@ -164,7 +164,17 @@ python -m vllm.entrypoints.openai.api_server \
 uvicorn main:app --host 0.0.0.0 --port 8101 --reload
 ```
 
-> 최초 실행 시: `python scripts/ingest_knowledge.py` (ChromaDB 임상 지식 초기화)
+### 최초 실행 시 (1회)
+
+```bash
+# 1. 임상 지식 베이스 구축 — PubMedQA·MedMCQA → ChromaDB maple_knowledge
+python scripts/ingest_knowledge.py
+
+# 2. AI 모델 등록 — AI_Models/ 스캔 → MongoDB + ChromaDB maple_models
+#    (maple-model-execution-server 디렉토리에서 실행)
+cd ../maple-model-execution-server
+python scan_and_register.py
+```
 
 ---
 
