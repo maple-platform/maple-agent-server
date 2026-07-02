@@ -1,7 +1,7 @@
 # llm/prompts/builders.py
 
 from .schemas import PLAN_OUTPUT_SCHEMA_TEXT
-from .utils import format_value, sort_image_roles, to_pretty_json
+from .utils import format_metadata, format_value, sort_image_roles, to_pretty_json
 
 
 def build_plan_prompt(
@@ -157,3 +157,71 @@ def build_general_prompt(query: str, csv_data: list[dict] | None = None) -> str:
 Analyze all attached data (images, numeric data, etc.) comprehensively and answer the user's request.
 Integrate image findings, abnormal numeric values, and clinical relevance into a concise first-pass screening summary.
 Write in natural Korean."""
+
+
+def build_general_prompt_from_attachments(
+    query: str,
+    attachments: list[dict],
+) -> tuple[str, list[str]]:
+    """정규화된 attachments[]로 general 프롬프트를 조립.
+    반환: (prompt, VLM에 순서대로 넣을 이미지 목록)
+
+    이미지가 파일당 여러 장(예: 3면 슬라이스) 올 수 있으므로,
+    각 이미지를 "Attachment i image j" 라벨로 명시하고 VLM 입력 순서와 일치시킨다.
+    """
+    sections: list[str] = []
+    vlm_images: list[str] = []
+    image_manifest: list[str] = []
+
+    for i, att in enumerate(attachments, 1):
+        atype = att.get("type") or "unknown"
+        fname = att.get("filename") or f"attachment_{i}"
+        lines = [f"### Attachment {i}: {fname} ({atype})"]
+
+        meta = att.get("metadata") or {}
+        if meta:
+            lines.append(f"- Metadata: {format_metadata(meta)}")
+
+        text = (att.get("text") or "").strip()
+        if text:
+            lines.append(f"- Extracted text: {text}")
+
+        tabular = att.get("tabular")
+        if tabular:
+            lines.append(f"- Tabular data:\n```json\n{to_pretty_json(tabular[:50])}\n```")
+
+        imgs = att.get("images") or []
+        if imgs:
+            labels = []
+            for j, img in enumerate(imgs, 1):
+                vlm_images.append(img)
+                label = f"Attachment {i} image {j}"
+                labels.append(label)
+                image_manifest.append(label)
+            lines.append(f"- Attached images: {', '.join(labels)}")
+
+        sections.append("\n".join(lines))
+
+    attachments_str = "\n\n".join(sections) if sections else "없음"
+
+    manifest_str = ""
+    if image_manifest:
+        ordered = "\n".join(f"{k}. {label}" for k, label in enumerate(image_manifest, 1))
+        manifest_str = (
+            "\n\n## Image Order\n"
+            "The images are provided to you in exactly this order:\n" + ordered
+        )
+
+    prompt = f"""## User Request
+{query}
+
+## Attachments
+{attachments_str}{manifest_str}
+
+## Instructions
+Analyze all attached data (images, extracted text, metadata, tabular values) comprehensively and answer the user's request.
+- Use each attachment's metadata (modality, body part, age, sex, etc.) as clinical context when interpreting its images.
+- Refer to images by their attachment and sequence when relevant.
+Integrate image findings, abnormal numeric values, and clinical relevance into a concise first-pass screening summary.
+Write in natural Korean."""
+    return prompt, vlm_images

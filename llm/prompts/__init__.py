@@ -12,6 +12,7 @@ from .builders import (
     build_clinical_prompt,
     build_interpret_prompt,
     build_general_prompt,
+    build_general_prompt_from_attachments,
 )
 
 from .schemas import (
@@ -31,6 +32,7 @@ __all__ = [
     "build_clinical_prompt",
     "build_interpret_prompt",
     "build_general_prompt",
+    "build_general_prompt_from_attachments",
     "PLAN_EXECUTION_SCHEMA",
     "PLAN_KNOWLEDGE_SCHEMA",
     "PLAN_GENERAL_SCHEMA",
