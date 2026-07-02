@@ -10,16 +10,38 @@ from services.experiment_logger import append_experiment_record
 router = APIRouter()
 
 
+class Attachment(BaseModel):
+    """라우팅 서버가 정규화한 첨부파일 하나.
+    (input-normalization-design.md §3 계약: attachments[])"""
+    type: str = ""                                            # dicom | nifti | image | csv | pdf ...
+    filename: str = ""
+    images: list[str] = Field(default_factory=list)           # VLM 입력 이미지 (data URI). 없으면 []
+    text: str = ""                                            # VLM 입력 텍스트 (ASR/OCR/추출). 없으면 ""
+    metadata: dict = Field(default_factory=dict)              # 구조화·비식별화 메타데이터
+    tabular: list[dict] | None = None                        # CSV면 dict 리스트, 아니면 null
+
+    @field_validator("images", mode="before")
+    @classmethod
+    def _images_none_to_list(cls, value):
+        return [] if value is None else value
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def _metadata_none_to_dict(cls, value):
+        return {} if value is None else value
+
+
 class PlanRequest(BaseModel):
     query: str
     uploaded_types: list[str] = Field(default_factory=list)   # ["dicom", "csv", ...] 업로드된 파일 타입 목록
     history: list[dict] = Field(default_factory=list)
     mode: Literal["auto", "clinical", "prediction", "general"] = "auto"
     # general 모드용 데이터 (백엔드가 변환해서 넘김)
-    images: list[str] = Field(default_factory=list)           # DICOM/NIfTI → PNG 변환 후 base64
-    csv_data: list[dict] = Field(default_factory=list)        # CSV → pd.read_csv().to_dict() 결과
+    images: list[str] = Field(default_factory=list)           # (레거시) DICOM/NIfTI → PNG 변환 후 base64
+    csv_data: list[dict] = Field(default_factory=list)        # (레거시) CSV → pd.read_csv().to_dict() 결과
+    attachments: list[Attachment] = Field(default_factory=list)  # 정규화 첨부파일 (레거시 images/csv_data 대체)
 
-    @field_validator("uploaded_types", "history", "images", "csv_data", mode="before")
+    @field_validator("uploaded_types", "history", "images", "csv_data", "attachments", mode="before")
     @classmethod
     def normalize_optional_lists(cls, value):
         return [] if value is None else value
@@ -70,7 +92,7 @@ async def plan(req: PlanRequest):
     # RSNA QI EXPERIMENT LOGGING END
 
     # prediction 모드에서 파일 없이 텍스트만 오는 경우 차단
-    if req.mode == "prediction" and not req.uploaded_types:
+    if req.mode == "prediction" and not req.uploaded_types and not req.attachments:
         result = {
             "status": "requires_input",
             "mode": "prediction",
@@ -87,6 +109,7 @@ async def plan(req: PlanRequest):
             mode=req.mode,
             images=req.images,
             csv_data=req.csv_data,
+            attachments=[a.model_dump() for a in req.attachments],
         )
 
     # RSNA QI EXPERIMENT LOGGING START: remove this block after study if desired.

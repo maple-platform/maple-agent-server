@@ -16,6 +16,7 @@ from llm.prompts import (
     build_clinical_prompt,
     build_interpret_prompt,
     build_general_prompt,
+    build_general_prompt_from_attachments,
 )
 from llm.prompts.utils import sort_image_roles
 
@@ -29,7 +30,12 @@ async def plan(
     mode: str = "auto",
     images: list[str] = [],
     csv_data: list[dict] = [],
+    attachments: list[dict] = [],
 ) -> dict:
+    # attachments만 오고 uploaded_types가 비면 type에서 파생 (prediction/auto 매칭 보존)
+    if not uploaded_types and attachments:
+        uploaded_types = [a.get("type", "") for a in attachments if a.get("type")]
+
     if mode == "clinical":
         return await _clinical(query)
 
@@ -37,9 +43,9 @@ async def plan(
         return await _prediction(query, uploaded_types)
 
     if mode == "general":
-        return await _general(query, images, csv_data)
+        return await _general(query, images, csv_data, attachments)
 
-    return await _auto(query, uploaded_types, images, csv_data)
+    return await _auto(query, uploaded_types, images, csv_data, attachments)
 
 
 # ── 파일 타입 정규화 ───────────────────────────────────────────────────────────
@@ -284,12 +290,23 @@ def _get_required_data(meta: dict, model_name: str) -> list[str]:
     return []
 
 
-async def _general(query: str, images: list[str], csv_data: list[dict]) -> dict:
-    """이미지 + CSV + 텍스트 → VLM 범용 종합 분석"""
-    prompt = build_general_prompt(query, csv_data)
+async def _general(
+    query: str,
+    images: list[str],
+    csv_data: list[dict],
+    attachments: list[dict] | None = None,
+) -> dict:
+    """이미지 + CSV + 텍스트 → VLM 범용 종합 분석.
+    attachments[]가 있으면 그걸로 조립하고, 없으면 레거시 images/csv_data 경로."""
+    attachments = attachments or []
+    if attachments:
+        prompt, vlm_images = build_general_prompt_from_attachments(query, attachments)
+    else:
+        prompt = build_general_prompt(query, csv_data)
+        vlm_images = images
     try:
-        if images:
-            result = await llm_client.generate_with_images(prompt, images, system=SYSTEM_GENERAL)
+        if vlm_images:
+            result = await llm_client.generate_with_images(prompt, vlm_images, system=SYSTEM_GENERAL)
         else:
             result = await llm_client.generate(prompt, system=SYSTEM_GENERAL)
     except httpx.HTTPStatusError as e:
@@ -311,10 +328,12 @@ async def _auto(
     uploaded_types: list[str],
     images: list[str] | None = None,
     csv_data: list[dict] | None = None,
+    attachments: list[dict] | None = None,
 ) -> dict:
     """LLM 기반 자동 분류 — execution / knowledge / general 중 하나로 라우팅"""
     images = images or []
     csv_data = csv_data or []
+    attachments = attachments or []
 
     wiki_context = wiki_service.search_wiki(query)
     model_results, knowledge_results, rag_context = await retrieve(query)
@@ -342,7 +361,7 @@ async def _auto(
             "message": parsed.get("message", "실행 계획이 수립되었습니다."),
         }
     elif parsed.get("type") == "general":
-        return await _general(query, images, csv_data)
+        return await _general(query, images, csv_data, attachments)
     else:
         sources = []
         for r in (model_results + knowledge_results):
