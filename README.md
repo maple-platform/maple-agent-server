@@ -17,8 +17,8 @@
         ├── HTTP ──────► [maple-model-execution-server] AI 모델 컨테이너 (Port 9020~9023)
         │
         └── SSH 터널 ──► [maple-agent-server] AI Agent (NHN Cloud B200, Port 8101)  ◄── 이 저장소
-                                ├── vLLM  (Port 8003, gemma-4-31B-it, B200 ×2 텐서 병렬)
-                                ├── ChromaDB  (Port 8002, 벡터 RAG)
+                                ├── vLLM  (Port 8011, gemma-4-31B-it, B200 ×2 텐서 병렬)
+                                ├── ChromaDB  (Port 8010, 벡터 RAG)
                                 └── /wiki  (마크다운 지식 누적 레이어)
 ```
 
@@ -151,14 +151,21 @@ maple-agent-server/
 source maple-agent-venv/bin/activate
 
 # 터미널 1 — ChromaDB
-chroma run --host 0.0.0.0 --port 8002 --path ./chroma_data
+chroma run --host 0.0.0.0 --port 8010 --path ./chroma_data
 
 # 터미널 2 — vLLM (B200 ×2 텐서 병렬)
 python -m vllm.entrypoints.openai.api_server \
   --model google/gemma-4-31B-it \
   --tensor-parallel-size 2 \
-  --port 8003 \
+  --port 8011 \
   --max-model-len 8192
+
+# CUDA_VISIBLE_DEVICES=1 python -m vllm.entrypoints.openai.api_server \
+#   --model google/gemma-4-31B-it \
+#   --port 8003 \
+#   --max-model-len 8192 \
+#   --tensor-parallel-size 1
+
 
 # 터미널 3 — Agent 서버
 uvicorn main:app --host 0.0.0.0 --port 8101 --reload
@@ -391,10 +398,10 @@ POST /agent/plan {mode: "general", query, images, csv_data}
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
-| `LLM_BASE_URL` | `http://localhost:8003/v1` | vLLM OpenAI 호환 API URL |
+| `LLM_BASE_URL` | `http://localhost:8011/v1` | vLLM OpenAI 호환 API URL |
 | `LLM_MODEL` | `google/gemma-4-31B-it` | 텍스트/VLM 모델명 |
 | `CHROMA_HOST` | `localhost` | ChromaDB 호스트 |
-| `CHROMA_PORT` | `8002` | ChromaDB 포트 |
+| `CHROMA_PORT` | `8010` | ChromaDB 포트 |
 | `WIKI_PATH` | `./wiki` | Wiki 파일 경로 |
 
 ---
@@ -410,7 +417,7 @@ ValueError: Tenant default_tenant not found
 ChromaDB를 먼저 실행한 뒤 `ingest_knowledge.py`로 초기화합니다.
 
 ```bash
-chroma run --host 0.0.0.0 --port 8002 --path ./chroma_data
+chroma run --host 0.0.0.0 --port 8010 --path ./chroma_data
 python scripts/ingest_knowledge.py
 ```
 

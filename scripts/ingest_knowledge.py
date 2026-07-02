@@ -10,7 +10,7 @@ PubMedQA + MedMCQA 데이터를 ChromaDB maple_knowledge 컬렉션에 ingest.
     --batch B      ChromaDB upsert 배치 크기 (기본: 256)
     --dry-run      ChromaDB에 쓰지 않고 샘플 3개만 출력
 
-주의: ChromaDB가 localhost:8002에서 실행 중이어야 합니다.
+주의: ChromaDB가 localhost:8010에서 실행 중이어야 합니다.
 """
 
 import argparse
@@ -29,7 +29,7 @@ import chromadb
 from chromadb.utils import embedding_functions
 
 CHROMA_HOST = os.getenv("CHROMA_HOST", "localhost")
-CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8002"))
+CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8010"))
 
 _ef = embedding_functions.SentenceTransformerEmbeddingFunction(
     model_name="all-MiniLM-L6-v2"

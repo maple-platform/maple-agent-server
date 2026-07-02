@@ -5,7 +5,7 @@ import httpx
 from typing import AsyncIterator
 
 
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8003/v1")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8011/v1")
 LLM_MODEL = os.getenv("LLM_MODEL", "google/gemma-4-31B-it")
 VLM_MODEL = os.getenv("VLM_MODEL", "google/gemma-4-31B-it")
 MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2048"))

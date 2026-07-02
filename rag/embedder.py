@@ -5,7 +5,7 @@ import chromadb
 from chromadb.utils import embedding_functions
 
 CHROMA_HOST = os.getenv("CHROMA_HOST", "localhost")
-CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8002"))
+CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8010"))
 
 _client: chromadb.HttpClient | None = None
 _ef = embedding_functions.SentenceTransformerEmbeddingFunction(
