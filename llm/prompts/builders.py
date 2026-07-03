@@ -144,6 +144,25 @@ Interpret the inference results and images above, and write a clinical report fo
 Write in natural Korean."""
 
 
+def build_intent_prompt(query: str, uploaded_types: list[str] | None = None) -> str:
+    uploaded_str = ", ".join(uploaded_types) if uploaded_types else "없음"
+    return f"""## User Request
+{query}
+
+## Uploaded File Types
+{uploaded_str}
+
+## Instructions
+Analyze the request and extract the clinical intent for specialized-model retrieval.
+Return only this JSON (values in English):
+{{
+  "body_part": "target body part or anatomy, or empty string",
+  "disease_group": "disease/condition group, or empty string",
+  "modality": "imaging modality if identifiable (MR, CT, X-ray, ...), or empty string",
+  "search_query": "a concise English phrase describing the analysis task, optimized for semantic model search"
+}}"""
+
+
 def build_general_prompt(query: str, csv_data: list[dict] | None = None) -> str:
     csv_data = csv_data or []
     csv_section = ""

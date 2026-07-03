@@ -41,6 +41,13 @@ def upsert_model(model_id: str, text: str, metadata: dict) -> None:
     col.upsert(ids=[model_id], documents=[text], metadatas=[metadata])
 
 
+def get_all_models() -> list[dict]:
+    """maple_models 컬렉션의 모든 모델 메타데이터 목록."""
+    col = _get_collection("maple_models")
+    result = col.get(include=["metadatas"])
+    return result.get("metadatas") or []
+
+
 def get_model_name(model_id: str) -> str | None:
     """model_id로 ChromaDB에서 model_name 역조회"""
     col = _get_collection("maple_models")
