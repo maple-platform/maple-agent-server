@@ -55,7 +55,7 @@ class ImageResult(BaseModel):
 class StepResult(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
-    step: int
+    step: int | str        # prediction=순번(int), general DAG=step_id(str "s1")
     model: str
     result_type: str = ""
     predictions: Any = Field(default_factory=list)
@@ -76,6 +76,8 @@ class TaskInfo(BaseModel):
 class ExecutionContext(BaseModel):
     mode: str
     plan: dict = {}              # /agent/plan이 반환한 execution_plan
+    attachments_meta: list[dict] = Field(default_factory=list)   # 원본 메타 (전환기)
+    attachments: list[dict] = Field(default_factory=list)        # 원본 스캔 (이미지+메타)
 
 
 class InterpretRequest(BaseModel):

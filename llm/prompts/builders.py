@@ -98,6 +98,24 @@ def build_interpret_prompt(
             else:
                 results_str += f"- 이미지 첨부: role={img.get('role', '')} (VLM 참조)\n"
 
+    # 원본 스캔 컨텍스트 (general 종합판독) — execution_context.attachments(_meta)
+    orig_source = execution_context.get("attachments") or execution_context.get("attachments_meta") or []
+    orig_section = ""
+    if orig_source:
+        orig_lines = []
+        total_imgs = 0
+        for idx, att in enumerate(orig_source, 1):
+            fname = att.get("filename") or f"attachment_{idx}"
+            atype = att.get("type") or "unknown"
+            meta = att.get("metadata") or {}
+            line = f"- {fname} ({atype})"
+            if meta:
+                line += f": {format_metadata(meta)}"
+            orig_lines.append(line)
+            total_imgs += len(att.get("images") or [])
+        note = f"\n원본 스캔 이미지 {total_imgs}장이 모델 결과 이미지 뒤에 함께 제공됩니다." if total_imgs else ""
+        orig_section = "\n## Original Scan Context\n" + "\n".join(orig_lines) + note + "\n"
+
     image_roles = image_roles or []
     image_instruction = ""
     if image_roles:
@@ -130,9 +148,10 @@ Insert `[IMG:role]` markers only where the image genuinely aids understanding of
 
 ## Wiki Reference
 {wiki_context if wiki_context else "관련 Wiki 정보 없음"}
-{image_instruction}
+{orig_section}{image_instruction}
 ## Instructions
 Interpret the inference results and images above, and write a clinical report for medical professionals.
+- Use the original scan context (modality, body part, age, sex, etc.) as clinical grounding when interpreting the model results.
 - Explain the clinical significance of each step's result.
 - Use probability values, model outputs (ROI, Grad-CAM, etc.) as the basis for findings.
 - Do not overstate the AI result as a definitive diagnosis; include uncertainty and limitations.

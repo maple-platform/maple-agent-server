@@ -636,6 +636,15 @@ async def interpret(
             "roles": step_roles,
         })
 
+    # 2.5 원본 스캔 이미지 추가 (general 종합판독) — 결과 이미지 뒤에 컨텍스트로 첨부
+    for att in (execution_context.get("attachments") or []):
+        for img in att.get("images") or []:
+            if not isinstance(img, str) or not img:
+                continue
+            raw = img.split(",", 1)[1] if img.startswith("data:") else img
+            if raw:
+                raw_images.append(raw)
+
     image_roles = _unique_preserve_order(ordered_roles)
     logger.info(
         "[interpret] input step image summary=%s",
