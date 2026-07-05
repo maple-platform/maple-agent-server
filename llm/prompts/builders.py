@@ -188,7 +188,8 @@ def build_model_select_prompt(query: str, intent: dict, candidates: list[dict]) 
     lines = []
     for i, c in enumerate(candidates, 1):
         m = c.get("metadata", {})
-        info = (c.get("text") or "").strip().replace("\n", " ")[:300]
+        # doc_text 전문을 보여준다 — 질환(disease) 목록이 잘려 핵심 키워드가 누락되지 않도록.
+        info = (c.get("text") or "").strip().replace("\n", " ")[:1200]
         lines.append(
             f"{i}. model_name: {m.get('model_name', '')}\n"
             f"   department: {m.get('department', '')} | project: {m.get('project', '')}\n"
@@ -208,7 +209,8 @@ def build_model_select_prompt(query: str, intent: dict, candidates: list[dict]) 
 
 ## Instructions
 Select the models appropriate to fulfill the user's request, using the request, the analyzed intent, and each candidate's info/task.
-- Pick only genuinely relevant models. If several relevant models exist for the same condition (e.g. a detection model and a classification model), include all of them.
+- A model is relevant if it can detect, classify, or otherwise identify the target condition — including when the condition appears among the findings listed in its info (질환/disease). Do NOT exclude a model just because its task_type wording (e.g. "classification") differs from the request wording (e.g. "detection").
+- If several relevant models exist for the same condition (e.g. a detection model AND a classification model that covers it), include ALL of them.
 - If none are appropriate, return an empty list.
 - Use model_name values exactly as listed. Do not invent models.
 
