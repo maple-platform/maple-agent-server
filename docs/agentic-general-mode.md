@@ -88,21 +88,59 @@ POST /agent/plan (general)       execution_plan.steps[] 수신   POST /agent/int
 
 ---
 
-## 5. interpret (Step 3, 종합 해석)
+## 5. Step 2 — DAG 실행·집계 (routing 담당)
 
-`POST /agent/interpret`가 실행·집계 결과를 받아 VLM 종합 판독문 생성.
+agent가 준 `execution_plan.steps[]`를 routing이 실행한다. agent는 이 단계를 수행하지 않지만,
+계약 이해를 위해 동작을 요약한다. (구현: `maple-routing-server/services/pipeline_service.py`,
+`services/format_convert.py`)
 
-- `step_results[]`: `step`(=step_id), `model`, `result_type`, `predictions`, `model_output`, `images[{role,data}]`
-- `execution_context.attachments[]`: **원본 스캔 이미지 + 메타데이터** — 종합 판독의 임상 컨텍스트.
-  프롬프트에 Original Scan Context(모달리티·부위·나이 등) + 원본 이미지를 VLM에 함께 투입.
-- 결과 이미지는 `[IMG:role]` 토큰으로 판독문에 인라인.
-- **null 내성**: routing이 `result_type`/`role`을 null로 보내도 `""`로 흡수(422 방지).
-
-구현: [services/agent_service.py](../services/agent_service.py) `interpret`, [llm/prompts/builders.py](../llm/prompts/builders.py) `build_interpret_prompt`.
+1. **위상 검증** — `depends_on` 참조 유효성 + Kahn 사이클 검사. 사이클이면 실행 거부.
+2. **DAG 실행** — step마다 asyncio 태스크. 각 태스크는 자기 `depends_on` 태스크 완료를 먼저 await.
+   - `depends_on: []` 노드들은 **동시(병렬) 시작**
+   - 의존 노드는 **선행 완료 즉시 시작** (barrier 낭비 없음 → 최대 병렬)
+3. **입력 포맷 정합 (Track B)** — `_resolve_step_input`:
+   - step의 `required_data` 카테고리와 업로드 원본이 맞으면 그대로 사용
+   - 다르면 **변환 레지스트리**(`CONVERTERS`: `dicom→image`, `nifti→image` …)로 변환.
+     예: ChestXray14(`image` 요구) + DICOM 업로드 → **DICOM을 PNG로 변환**해 투입
+   - 의존 노드는 원본 + 선행 출력의 ROI를 병합해 전달
+   - 변환/매칭 불가 시 그 step만 **skip + `errors[]` 기록**(전체 중단 아님)
+4. **집계** — 결과를 **step별 1엔트리 평탄 리스트(`step_results`)** 로. 병렬/순차 구조는
+   `depends_on`에 보존. `result_type`이 컨테이너에서 null이면 DB메타→plan step→이미지유무로 coalesce.
+   일부 실패 시 `status: "partial"` + `errors[]`, 전부 실패면 error.
+5. 집계된 `step_results` + 원본 `attachments`를 **Step 3 interpret로 전달**.
 
 ---
 
-## 6. 크로스레포 분담
+## 6. Step 3 — interpret (종합 해석, agent 담당)
+
+`POST /agent/interpret`가 실행·집계 결과를 받아 VLM 종합 판독문을 생성한다.
+구현: [services/agent_service.py](../services/agent_service.py) `interpret`, [llm/prompts/builders.py](../llm/prompts/builders.py) `build_interpret_prompt`.
+
+**입력**
+- `step_results[]`: `step`(=step_id), `model`, `result_type`, `predictions`, `model_output`, `images[{role,data}]`
+- `execution_context`: `mode`, `plan`, `attachments[]`(원본 스캔 이미지+메타), `attachments_meta[]`(전환기 폴백)
+
+**처리 흐름**
+1. **Wiki 컨텍스트 수집** — 각 step 모델의 Wiki 페이지를 모아 배경 지식으로 첨부.
+2. **이미지 수집**
+   - `step_results[].images` → `role→data` 맵(`image_map`, 프론트 렌더용) + VLM 입력용 base64 목록.
+     `role`이 있으면 `[IMG:role]` 토큰 후보, 없으면 컨텍스트 이미지로만 사용.
+   - `execution_context.attachments[].images`(원본 스캔) → **결과 이미지 뒤에** VLM 입력으로 추가.
+3. **프롬프트 조립** — 실행 결과 요약 + Wiki + **Original Scan Context**(모달리티·부위·나이 등 메타)
+   + 이미지 삽입 규칙(`[IMG:role]`는 해당 소견을 설명하는 문장 뒤에만).
+4. **생성** — 이미지 있으면 VLM, 없으면 LLM. HTTP/타임아웃 오류 시 텍스트 전용으로 폴백 재시도.
+5. **품질 검사 & 재시도** (`_needs_interpretation_retry`) — 분석 텍스트가 부족하면(<120자 / 섹션<3 /
+   문장<4) 1회 재생성, 그래도 미달이면 **서버 폴백 판독문**(보수적 4섹션 템플릿) 반환.
+6. **토큰 보완** (`_ensure_all_image_tokens`) — 본문에 빠진 `[IMG:role]`는 "Attached Images" 부록으로 첨부.
+7. **Wiki 누적** — 각 모델 페이지에 해석 결과 파일링(`wiki/interpretations/`, 런타임 산출물이라 gitignore).
+8. **응답** — `{interpretation, interpretation_raw, images}` (`images`는 `role→dataURI` 맵; 프론트가
+   `[IMG:role]` 토큰을 해당 이미지로 인라인 치환).
+
+**null 내성**: routing이 `result_type`/`role`을 null로 보내도 `""`로 흡수(422 방지).
+
+---
+
+## 7. 크로스레포 분담
 
 | 레포 | 책임 |
 |---|---|
@@ -116,7 +154,7 @@ agent는 확장자 불일치로 모델을 탈락시키지 않는다(관련 모�
 
 ---
 
-## 7. 주요 결정 / 수정 로그
+## 8. 주요 결정 / 수정 로그
 
 | 커밋 | 내용 |
 |---|---|
