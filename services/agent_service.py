@@ -18,6 +18,7 @@ from llm.prompts import (
     build_clinical_prompt,
     build_interpret_prompt,
     build_intent_prompt,
+    build_model_select_prompt,
     build_general_prompt,
     build_general_prompt_from_attachments,
 )
@@ -293,8 +294,8 @@ def _get_required_data(meta: dict, model_name: str) -> list[str]:
     return []
 
 
-GENERAL_SCORE_THRESHOLD = 0.65   # general 모델 탐색 유사도 하한
-GENERAL_MAX_MODELS = 5           # general 모델 탐색 최대 개수
+GENERAL_MAX_MODELS = 5      # general 실행계획 최대 모델 수
+VECTOR_RECALL_K = 8         # 벡터 recall 후보 수 (문턱 없이 넓게)
 
 
 async def _general(
@@ -305,31 +306,20 @@ async def _general(
     uploaded_types: list[str] | None = None,
 ) -> dict:
     """general 오케스트레이션:
-    의도분석 → 모델검색(유사도 ≥0.65, 최대 5) → 입력 유효성 검증 →
-    provides/requires 기반 DAG 실행계획 반환. 매칭 모델 0개면 VLM 단독 fallback."""
+    의도분석 → 하이브리드 후보 recall(벡터+메타 키워드) → LLM 모델 선택 →
+    provides/requires 기반 DAG 실행계획 반환. 선택 모델 0개면 VLM 단독 fallback.
+    확장자 불일치로 탈락시키지 않는다 — 포맷 정합은 라우팅(Track B) 몫이며 required_data로 전달."""
     attachments = attachments or []
     uploaded_types = uploaded_types or []
 
-    # 1. LLM 의도 분석 → 검색 쿼리 도출
+    # 1. LLM 의도 분석 (한글→영어 브릿지, 신체부위·질환군 추출)
     intent = await _analyze_intent(query, uploaded_types)
-    search_query = intent.get("search_query") or query
 
-    # 2. 모델 검색 + 유사도 필터
-    try:
-        model_results = search_models(search_query, n_results=GENERAL_MAX_MODELS)
-    except Exception:
-        model_results = []
-    candidates = [
-        r["metadata"] for r in model_results
-        if r.get("score", 0) >= GENERAL_SCORE_THRESHOLD and r.get("metadata")
-    ]
+    # 2. 하이브리드 후보 recall — 벡터 + 메타데이터 키워드 (문턱 없이 넓게)
+    candidates = _discover_models(query, intent)
 
-    # 3. 입력 데이터 유효성 검증 (required_data 매칭 안 되는 모델 제외)
-    selected = []
-    for meta in candidates:
-        required = _get_required_data(meta, meta.get("model_name", ""))
-        if not required or _types_match(required, uploaded_types):
-            selected.append(meta)
+    # 3. LLM이 후보 중 적절한 모델 선택 (매직 문턱 대체)
+    selected = (await _select_models(query, intent, candidates))[:GENERAL_MAX_MODELS]
 
     # 4. 매칭 모델 0개 → VLM 단독 fallback
     if not selected:
@@ -378,6 +368,89 @@ async def _analyze_intent(query: str, uploaded_types: list[str]) -> dict:
     except Exception:
         logger.exception("[general] intent analysis failed")
         return {}
+
+
+# 불용어 — 키워드 매칭에서 잡음 제거 (질환/부위 같은 실질 키워드만 남김)
+_KW_STOP = {
+    "of", "in", "the", "a", "an", "and", "or", "on", "for", "with", "to",
+    "detection", "detect", "classification", "classify", "imaging", "image",
+    "analysis", "analyze", "scan", "study", "model", "chest",
+}
+
+
+def _intent_keywords(intent: dict) -> set[str]:
+    """의도분석 결과에서 키워드 매칭용 실질 단어 집합 추출 (질환·부위 중심)."""
+    terms: set[str] = set()
+    for key in ("disease_group", "body_part", "modality"):
+        val = (intent.get(key) or "").lower()
+        for t in re.split(r"[,\s]+", val):
+            if t:
+                terms.add(t)
+    for t in re.split(r"[,\s]+", (intent.get("search_query") or "").lower()):
+        if t:
+            terms.add(t)
+    return {t for t in terms if len(t) > 2 and t not in _KW_STOP}
+
+
+def _discover_models(query: str, intent: dict) -> list[dict]:
+    """하이브리드 후보 recall — 벡터 검색 + 메타데이터 키워드 매칭 (문턱 없이 넓게).
+    반환: [{"metadata": {...}, "text": "<doc_text>"}] (model_name 기준 dedup)"""
+    candidates: dict[str, dict] = {}   # model_name → {"metadata", "text"}
+
+    # 벡터 recall (의도분석 영어 쿼리 우선, 없으면 원본)
+    search_query = intent.get("search_query") or query
+    try:
+        for r in search_models(search_query, n_results=VECTOR_RECALL_K):
+            meta = r.get("metadata") or {}
+            name = meta.get("model_name")
+            if name and name not in candidates:
+                candidates[name] = {"metadata": meta, "text": r.get("text", "")}
+    except Exception:
+        logger.exception("[general] vector recall failed")
+
+    # 키워드 recall — 등록 모델 전체의 doc_text/메타에 의도 키워드가 있으면 포함
+    #   (임베딩 점수와 무관하게 'pneumonia' 같은 명시 키워드를 확정 포착)
+    kw = _intent_keywords(intent)
+    if kw:
+        try:
+            for m in embedder.get_all_models():
+                name = m.get("model_name")
+                if not name or name in candidates:
+                    continue
+                doc = (m.get("_document") or "").lower()
+                hay = f"{doc} {name} {m.get('task_type', '')}".lower()
+                if any(t in hay for t in kw):
+                    meta = {k: v for k, v in m.items() if k != "_document"}
+                    candidates[name] = {"metadata": meta, "text": m.get("_document", "")}
+        except Exception:
+            logger.exception("[general] keyword recall failed")
+
+    return list(candidates.values())
+
+
+async def _select_models(query: str, intent: dict, candidates: list[dict]) -> list[dict]:
+    """후보 중 적절한 모델을 LLM이 선택. 반환: 선택된 메타데이터 목록."""
+    if not candidates:
+        return []
+    try:
+        raw = await llm_client.generate(
+            build_model_select_prompt(query, intent, candidates), system=SYSTEM_PLAN
+        )
+        parsed = _parse_json_response(raw)
+    except Exception:
+        logger.exception("[general] model selection failed")
+        return []
+
+    names = parsed.get("selected_models") or parsed.get("models") or []
+    if not isinstance(names, list):
+        return []
+    by_name = {c["metadata"].get("model_name"): c["metadata"] for c in candidates}
+    selected = []
+    for n in names:
+        meta = by_name.get(n)
+        if meta is not None and meta not in selected:
+            selected.append(meta)
+    return selected
 
 
 async def _run_general_vlm(

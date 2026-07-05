@@ -42,10 +42,18 @@ def upsert_model(model_id: str, text: str, metadata: dict) -> None:
 
 
 def get_all_models() -> list[dict]:
-    """maple_models 컬렉션의 모든 모델 메타데이터 목록."""
+    """maple_models 컬렉션의 모든 모델 메타데이터 목록.
+    키워드 매칭용으로 doc_text를 '_document' 키에 함께 담아 반환."""
     col = _get_collection("maple_models")
-    result = col.get(include=["metadatas"])
-    return result.get("metadatas") or []
+    result = col.get(include=["metadatas", "documents"])
+    metas = result.get("metadatas") or []
+    docs = result.get("documents") or []
+    out = []
+    for i, meta in enumerate(metas):
+        m = dict(meta)
+        m["_document"] = docs[i] if i < len(docs) else ""
+        out.append(m)
+    return out
 
 
 def get_model_name(model_id: str) -> str | None:

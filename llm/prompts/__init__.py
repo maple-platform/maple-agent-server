@@ -13,6 +13,7 @@ from .builders import (
     build_clinical_prompt,
     build_interpret_prompt,
     build_intent_prompt,
+    build_model_select_prompt,
     build_general_prompt,
     build_general_prompt_from_attachments,
 )
@@ -35,6 +36,7 @@ __all__ = [
     "build_clinical_prompt",
     "build_interpret_prompt",
     "build_intent_prompt",
+    "build_model_select_prompt",
     "build_general_prompt",
     "build_general_prompt_from_attachments",
     "PLAN_EXECUTION_SCHEMA",

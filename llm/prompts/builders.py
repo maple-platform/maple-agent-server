@@ -182,6 +182,40 @@ Return only this JSON (values in English):
 }}"""
 
 
+def build_model_select_prompt(query: str, intent: dict, candidates: list[dict]) -> str:
+    """후보 모델 중 쿼리에 적절한 것을 LLM이 고르게 하는 프롬프트.
+    candidates: [{"metadata": {...}, "text": "<doc_text>"}]"""
+    lines = []
+    for i, c in enumerate(candidates, 1):
+        m = c.get("metadata", {})
+        info = (c.get("text") or "").strip().replace("\n", " ")[:300]
+        lines.append(
+            f"{i}. model_name: {m.get('model_name', '')}\n"
+            f"   department: {m.get('department', '')} | project: {m.get('project', '')}\n"
+            f"   task_type: {m.get('task_type', '')} | required_data: {m.get('required_data', '')}\n"
+            f"   info: {info}"
+        )
+    candidates_str = "\n".join(lines) if lines else "(no candidates)"
+
+    return f"""## User Request
+{query}
+
+## Analyzed Intent
+{to_pretty_json(intent)}
+
+## Candidate Models
+{candidates_str}
+
+## Instructions
+Select the models appropriate to fulfill the user's request, using the request, the analyzed intent, and each candidate's info/task.
+- Pick only genuinely relevant models. If several relevant models exist for the same condition (e.g. a detection model and a classification model), include all of them.
+- If none are appropriate, return an empty list.
+- Use model_name values exactly as listed. Do not invent models.
+
+Return only this JSON, no markdown fences:
+{{"selected_models": ["model_name", ...]}}"""
+
+
 def build_general_prompt(query: str, csv_data: list[dict] | None = None) -> str:
     csv_data = csv_data or []
     csv_section = ""
