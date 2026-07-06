@@ -4,6 +4,7 @@ from .system import (
     SYSTEM_PLAN,
     SYSTEM_CLINICAL,
     SYSTEM_INTERPRET,
+    SYSTEM_INTENT,
     SYSTEM_GENERAL,
 )
 
@@ -11,6 +12,8 @@ from .builders import (
     build_plan_prompt,
     build_clinical_prompt,
     build_interpret_prompt,
+    build_intent_prompt,
+    build_model_select_prompt,
     build_general_prompt,
     build_general_prompt_from_attachments,
 )
@@ -27,10 +30,13 @@ __all__ = [
     "SYSTEM_PLAN",
     "SYSTEM_CLINICAL",
     "SYSTEM_INTERPRET",
+    "SYSTEM_INTENT",
     "SYSTEM_GENERAL",
     "build_plan_prompt",
     "build_clinical_prompt",
     "build_interpret_prompt",
+    "build_intent_prompt",
+    "build_model_select_prompt",
     "build_general_prompt",
     "build_general_prompt_from_attachments",
     "PLAN_EXECUTION_SCHEMA",

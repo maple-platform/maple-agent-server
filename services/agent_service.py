@@ -6,15 +6,19 @@ import httpx
 from services import wiki_service
 from services.rag_service import retrieve
 from rag.retriever import search_models
+from rag import embedder
 from llm import client as llm_client
 from llm.prompts import (
     SYSTEM_PLAN,
     SYSTEM_CLINICAL,
     SYSTEM_INTERPRET,
+    SYSTEM_INTENT,
     SYSTEM_GENERAL,
     build_plan_prompt,
     build_clinical_prompt,
     build_interpret_prompt,
+    build_intent_prompt,
+    build_model_select_prompt,
     build_general_prompt,
     build_general_prompt_from_attachments,
 )
@@ -43,7 +47,7 @@ async def plan(
         return await _prediction(query, uploaded_types)
 
     if mode == "general":
-        return await _general(query, images, csv_data, attachments)
+        return await _general(query, images, csv_data, attachments, uploaded_types)
 
     return await _auto(query, uploaded_types, images, csv_data, attachments)
 
@@ -290,15 +294,172 @@ def _get_required_data(meta: dict, model_name: str) -> list[str]:
     return []
 
 
+GENERAL_MAX_MODELS = 5      # general 실행계획 최대 모델 수
+VECTOR_RECALL_K = 8         # 벡터 recall 후보 수 (문턱 없이 넓게)
+
+
 async def _general(
     query: str,
     images: list[str],
     csv_data: list[dict],
     attachments: list[dict] | None = None,
+    uploaded_types: list[str] | None = None,
 ) -> dict:
-    """이미지 + CSV + 텍스트 → VLM 범용 종합 분석.
-    attachments[]가 있으면 그걸로 조립하고, 없으면 레거시 images/csv_data 경로."""
+    """general 오케스트레이션:
+    의도분석 → 하이브리드 후보 recall(벡터+메타 키워드) → LLM 모델 선택 →
+    provides/requires 기반 DAG 실행계획 반환. 선택 모델 0개면 VLM 단독 fallback.
+    확장자 불일치로 탈락시키지 않는다 — 포맷 정합은 라우팅(Track B) 몫이며 required_data로 전달."""
     attachments = attachments or []
+    uploaded_types = uploaded_types or []
+
+    # 1. LLM 의도 분석 (한글→영어 브릿지, 신체부위·질환군 추출)
+    intent = await _analyze_intent(query, uploaded_types)
+
+    # 2. 하이브리드 후보 recall — 벡터 + 메타데이터 키워드 (문턱 없이 넓게)
+    candidates = _discover_models(query, intent)
+
+    # 3. LLM이 후보 중 적절한 모델 선택 (매직 문턱 대체)
+    selected = (await _select_models(query, intent, candidates))[:GENERAL_MAX_MODELS]
+
+    # 4. 매칭 모델 0개 → VLM 단독 fallback
+    if not selected:
+        message = await _run_general_vlm(query, images, csv_data, attachments)
+        return {
+            "status": "ready",
+            "query_type": "general",
+            "mode": "general",
+            "execution_plan": {"steps": []},
+            "fallback_vlm_only": True,
+            "message": message,
+        }
+
+    # 5. provides/requires 기반 DAG 실행계획 생성
+    steps = _build_execution_dag(selected)
+    if not steps:
+        # 선행 조건을 못 채워 전부 제외된 경우도 VLM fallback
+        message = await _run_general_vlm(query, images, csv_data, attachments)
+        return {
+            "status": "ready",
+            "query_type": "general",
+            "mode": "general",
+            "execution_plan": {"steps": []},
+            "fallback_vlm_only": True,
+            "message": message,
+        }
+
+    return {
+        "status": "ready",
+        "query_type": "general",
+        "mode": "general",
+        "execution_plan": {"steps": steps},
+        "fallback_vlm_only": False,
+        "message": "",
+    }
+
+
+async def _analyze_intent(query: str, uploaded_types: list[str]) -> dict:
+    """LLM 의도 분석 — 신체부위·질환군·모달리티·검색쿼리 추출. 실패 시 빈 dict."""
+    try:
+        raw = await llm_client.generate(
+            build_intent_prompt(query, uploaded_types), system=SYSTEM_INTENT
+        )
+        parsed = _parse_json_response(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        logger.exception("[general] intent analysis failed")
+        return {}
+
+
+# 불용어 — 키워드 매칭에서 잡음 제거 (질환/부위 같은 실질 키워드만 남김)
+_KW_STOP = {
+    "of", "in", "the", "a", "an", "and", "or", "on", "for", "with", "to",
+    "detection", "detect", "classification", "classify", "imaging", "image",
+    "analysis", "analyze", "scan", "study", "model", "chest",
+}
+
+
+def _intent_keywords(intent: dict) -> set[str]:
+    """의도분석 결과에서 키워드 매칭용 실질 단어 집합 추출 (질환·부위 중심)."""
+    terms: set[str] = set()
+    for key in ("disease_group", "body_part", "modality"):
+        val = (intent.get(key) or "").lower()
+        for t in re.split(r"[,\s]+", val):
+            if t:
+                terms.add(t)
+    for t in re.split(r"[,\s]+", (intent.get("search_query") or "").lower()):
+        if t:
+            terms.add(t)
+    return {t for t in terms if len(t) > 2 and t not in _KW_STOP}
+
+
+def _discover_models(query: str, intent: dict) -> list[dict]:
+    """하이브리드 후보 recall — 벡터 검색 + 메타데이터 키워드 매칭 (문턱 없이 넓게).
+    반환: [{"metadata": {...}, "text": "<doc_text>"}] (model_name 기준 dedup)"""
+    candidates: dict[str, dict] = {}   # model_name → {"metadata", "text"}
+
+    # 벡터 recall (의도분석 영어 쿼리 우선, 없으면 원본)
+    search_query = intent.get("search_query") or query
+    try:
+        for r in search_models(search_query, n_results=VECTOR_RECALL_K):
+            meta = r.get("metadata") or {}
+            name = meta.get("model_name")
+            if name and name not in candidates:
+                candidates[name] = {"metadata": meta, "text": r.get("text", "")}
+    except Exception:
+        logger.exception("[general] vector recall failed")
+
+    # 키워드 recall — 등록 모델 전체의 doc_text/메타에 의도 키워드가 있으면 포함
+    #   (임베딩 점수와 무관하게 'pneumonia' 같은 명시 키워드를 확정 포착)
+    kw = _intent_keywords(intent)
+    if kw:
+        try:
+            for m in embedder.get_all_models():
+                name = m.get("model_name")
+                if not name or name in candidates:
+                    continue
+                doc = (m.get("_document") or "").lower()
+                hay = f"{doc} {name} {m.get('task_type', '')}".lower()
+                if any(t in hay for t in kw):
+                    meta = {k: v for k, v in m.items() if k != "_document"}
+                    candidates[name] = {"metadata": meta, "text": m.get("_document", "")}
+        except Exception:
+            logger.exception("[general] keyword recall failed")
+
+    return list(candidates.values())
+
+
+async def _select_models(query: str, intent: dict, candidates: list[dict]) -> list[dict]:
+    """후보 중 적절한 모델을 LLM이 선택. 반환: 선택된 메타데이터 목록."""
+    if not candidates:
+        return []
+    try:
+        raw = await llm_client.generate(
+            build_model_select_prompt(query, intent, candidates), system=SYSTEM_PLAN
+        )
+        parsed = _parse_json_response(raw)
+    except Exception:
+        logger.exception("[general] model selection failed")
+        return []
+
+    names = parsed.get("selected_models") or parsed.get("models") or []
+    if not isinstance(names, list):
+        return []
+    by_name = {c["metadata"].get("model_name"): c["metadata"] for c in candidates}
+    selected = []
+    for n in names:
+        meta = by_name.get(n)
+        if meta is not None and meta not in selected:
+            selected.append(meta)
+    return selected
+
+
+async def _run_general_vlm(
+    query: str,
+    images: list[str],
+    csv_data: list[dict],
+    attachments: list[dict],
+) -> str:
+    """이미지 + CSV + 메타데이터 → VLM 범용 종합 분석 (모델 미매칭 fallback)."""
     if attachments:
         prompt, vlm_images = build_general_prompt_from_attachments(query, attachments)
     else:
@@ -306,9 +467,8 @@ async def _general(
         vlm_images = images
     try:
         if vlm_images:
-            result = await llm_client.generate_with_images(prompt, vlm_images, system=SYSTEM_GENERAL)
-        else:
-            result = await llm_client.generate(prompt, system=SYSTEM_GENERAL)
+            return await llm_client.generate_with_images(prompt, vlm_images, system=SYSTEM_GENERAL)
+        return await llm_client.generate(prompt, system=SYSTEM_GENERAL)
     except httpx.HTTPStatusError as e:
         detail = e.response.text[:300] if e.response is not None else str(e)
         fallback_prompt = (
@@ -318,9 +478,132 @@ async def _general(
             "응답은 반드시 영어로 작성하세요. "
             f"LLM 오류 요약:{detail}"
         )
-        result = await llm_client.generate(fallback_prompt, system=SYSTEM_GENERAL)
+        return await llm_client.generate(fallback_prompt, system=SYSTEM_GENERAL)
 
-    return {"query_type": "general", "mode": "general", "message": result}
+
+# ── general 실행계획 DAG ────────────────────────────────────────────────────────
+
+def _get_list_field(meta: dict, key: str) -> list[str]:
+    """ChromaDB 메타데이터의 콤마 결합 리스트 값을 파싱."""
+    val = meta.get(key)
+    if isinstance(val, str):
+        return [v.strip() for v in val.split(",") if v.strip()]
+    if isinstance(val, list):
+        return val
+    return []
+
+
+def _find_provider(tag: str) -> dict | None:
+    """레지스트리 전체에서 tag를 provides하는 모델 메타 탐색."""
+    try:
+        all_models = embedder.get_all_models()
+    except Exception:
+        return None
+    for meta in all_models:
+        if tag in _get_list_field(meta, "provides"):
+            return meta
+    return None
+
+
+def _build_execution_dag(selected: list[dict]) -> list[dict]:
+    """선택된 모델들 + provides/requires 선행조건으로 DAG 실행계획을 구성.
+    - 선행 태그를 provides하는 모델을 (선택목록 또는 레지스트리에서) 찾아 step 포함 + depends_on wiring
+    - 선행을 못 채우는 모델은 제외(연쇄 제외)
+    - 사이클은 제거"""
+    nodes: list[dict] = []              # {step_id, meta, depends_on}
+    id_by_model: dict[str, str] = {}    # model_name → step_id
+    provider_of: dict[str, str] = {}    # tag → step_id
+
+    def _add(meta: dict) -> str:
+        model_name = meta.get("model_name", "")
+        if model_name in id_by_model:
+            return id_by_model[model_name]
+        sid = f"s{len(nodes) + 1}"
+        nodes.append({"step_id": sid, "meta": meta, "depends_on": []})
+        id_by_model[model_name] = sid
+        for tag in _get_list_field(meta, "provides"):
+            provider_of.setdefault(tag, sid)
+        return sid
+
+    for meta in selected:
+        _add(meta)
+
+    # 선행조건 wiring (nodes가 커질 수 있으므로 인덱스 순회)
+    dropped: set[str] = set()
+    i = 0
+    while i < len(nodes):
+        node = nodes[i]
+        deps: list[str] = []
+        satisfied = True
+        for tag in _get_list_field(node["meta"], "requires"):
+            provider_sid = provider_of.get(tag)
+            if provider_sid is None:
+                provider_meta = _find_provider(tag)
+                if provider_meta is None:
+                    satisfied = False
+                    break
+                provider_sid = _add(provider_meta)
+            deps.append(provider_sid)
+        if not satisfied:
+            dropped.add(node["step_id"])
+        node["depends_on"] = list(dict.fromkeys(deps))
+        i += 1
+
+    # 선행 미충족 노드에 의존하는 노드도 연쇄 제외
+    changed = True
+    while changed:
+        changed = False
+        for node in nodes:
+            if node["step_id"] in dropped:
+                continue
+            if any(d in dropped for d in node["depends_on"]):
+                dropped.add(node["step_id"])
+                changed = True
+
+    remaining = [n for n in nodes if n["step_id"] not in dropped]
+    remaining = _resolve_cycles(remaining)
+
+    steps = []
+    for n in remaining:
+        m = n["meta"]
+        steps.append({
+            "step_id": n["step_id"],
+            "model_name": m.get("model_name", ""),
+            "department": m.get("department", ""),
+            "project": m.get("project", ""),
+            "task_type": m.get("task_type", ""),
+            "result_type": m.get("result_type", ""),
+            "required_data": _get_required_data(m, m.get("model_name", "")),
+            "depends_on": n["depends_on"],
+        })
+    return steps
+
+
+def _resolve_cycles(nodes: list[dict]) -> list[dict]:
+    """위상정렬 불가능한(사이클에 속한) 노드를 제거. (Kahn 알고리즘)"""
+    ids = {n["step_id"] for n in nodes}
+    deps = {n["step_id"]: [d for d in n["depends_on"] if d in ids] for n in nodes}
+    indeg = {sid: len(deps[sid]) for sid in ids}
+    radj: dict[str, list[str]] = {sid: [] for sid in ids}
+    for sid, ds in deps.items():
+        for d in ds:
+            radj[d].append(sid)
+
+    queue = [sid for sid in ids if indeg[sid] == 0]
+    ordered: set[str] = set()
+    while queue:
+        n = queue.pop()
+        ordered.add(n)
+        for m in radj[n]:
+            indeg[m] -= 1
+            if indeg[m] == 0:
+                queue.append(m)
+
+    if len(ordered) != len(ids):
+        cyclic = ids - ordered
+        logger.warning("[general] dropping models in dependency cycle: %s", cyclic)
+        return [n for n in nodes if n["step_id"] in ordered]
+    return nodes
 
 
 async def _auto(
@@ -361,7 +644,7 @@ async def _auto(
             "message": parsed.get("message", "실행 계획이 수립되었습니다."),
         }
     elif parsed.get("type") == "general":
-        return await _general(query, images, csv_data, attachments)
+        return await _general(query, images, csv_data, attachments, uploaded_types)
     else:
         sources = []
         for r in (model_results + knowledge_results):
@@ -425,6 +708,15 @@ async def interpret(
             "count": len(step_roles),
             "roles": step_roles,
         })
+
+    # 2.5 원본 스캔 이미지 추가 (general 종합판독) — 결과 이미지 뒤에 컨텍스트로 첨부
+    for att in (execution_context.get("attachments") or []):
+        for img in att.get("images") or []:
+            if not isinstance(img, str) or not img:
+                continue
+            raw = img.split(",", 1)[1] if img.startswith("data:") else img
+            if raw:
+                raw_images.append(raw)
 
     image_roles = _unique_preserve_order(ordered_roles)
     logger.info(

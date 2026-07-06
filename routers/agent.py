@@ -48,19 +48,29 @@ class PlanRequest(BaseModel):
 
 
 class ImageResult(BaseModel):
-    role: str        # bbox_overlay | gradcam_overlay | segmentation_overlay
-    data: str        # data:image/png;base64,...
+    role: str = ""   # bbox_overlay | gradcam_overlay | segmentation_overlay
+    data: str = ""   # data:image/png;base64,...
+
+    @field_validator("role", "data", mode="before")
+    @classmethod
+    def _none_to_str(cls, value):
+        return "" if value is None else value
 
 
 class StepResult(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
-    step: int
-    model: str
-    result_type: str = ""
+    step: int | str        # prediction=순번(int), general DAG=step_id(str "s1")
+    model: str = ""
+    result_type: str = ""  # 컨테이너가 안 주면 null로 올 수 있음 → "" 흡수
     predictions: Any = Field(default_factory=list)
     model_output: Any = Field(default_factory=dict)      # ROI 좌표, 분류 상세, segmentation 메타, raw text 등
     images: list[ImageResult | dict | str] = Field(default_factory=list)
+
+    @field_validator("model", "result_type", mode="before")
+    @classmethod
+    def _none_to_str(cls, value):
+        return "" if value is None else value
 
     @field_validator("images", mode="before")
     @classmethod
@@ -76,6 +86,8 @@ class TaskInfo(BaseModel):
 class ExecutionContext(BaseModel):
     mode: str
     plan: dict = {}              # /agent/plan이 반환한 execution_plan
+    attachments_meta: list[dict] = Field(default_factory=list)   # 원본 메타 (전환기)
+    attachments: list[dict] = Field(default_factory=list)        # 원본 스캔 (이미지+메타)
 
 
 class InterpretRequest(BaseModel):
