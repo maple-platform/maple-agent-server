@@ -1,7 +1,7 @@
 # maple-platform
 
 의료 전문가가 AI 모델과 대화하듯 상호작용하는 **임상 AI 플랫폼**입니다.
-도메인 특화 AI 모델 실행, RAG 기반 임상 지식 검색, VLM 범용 분석을 하나의 채팅 인터페이스에서 제공합니다.
+도메인 특화 AI 모델 실행, RAG 기반 임상 지식 검색, 첨부파일 종합 분석(에이전틱 오케스트레이션)을 하나의 채팅 인터페이스에서 제공합니다.
 
 ---
 
@@ -26,7 +26,7 @@
 |---|---|
 | `maple-client` | 채팅 UI, 추론 결과 시각화 (React + Electron) |
 | `maple-routing-server` | 요청 라우팅, AI 컨테이너 오케스트레이션, 결과 저장 |
-| **`maple-agent-server`** | **쿼리 분류, RAG 임상 해석, 모델 검색, VLM 분석** |
+| **`maple-agent-server`** | **쿼리 분류, 모델 자동발견·DAG 계획, RAG 임상 해석, VLM 종합** |
 | `maple-model-execution-server` | 도메인 특화 AI 모델 컨테이너 (UNet3D, YOLO26x, ChestXray14 등) |
 
 ---
@@ -40,7 +40,7 @@
 |---|---|---|
 | `prediction` | 의료 영상/데이터 + 특화 모델 쿼리 | ChromaDB 모델 검색 → 컨테이너 실행 → VLM 임상 해석 |
 | `clinical` | 임상 지식 질문 | Wiki + RAG(PubMedQA·MedMCQA) → LLM 즉시 답변 |
-| `general` | 이미지·수치 데이터 종합 분석 | VLM(gemma-4-31B-it) 멀티모달 분석 |
+| `general` | 첨부파일 + 자연어 종합 분석 | 의도분석 → 모델 자동발견(하이브리드 검색+LLM 선택) → DAG 실행 → VLM 종합 해석 (매칭 모델 0개면 VLM 단독) |
 | `auto` | 기본값 | LLM이 쿼리 유형 판단 후 자동 분기 |
 
 ### 2. Wiki + RAG 하이브리드 지식 레이어
@@ -65,18 +65,37 @@ gemma-4-31B-it → 임상 응답 생성
 | RAG | PubMedQA·MedMCQA 논문/QA 벡터 검색 | ChromaDB `maple_knowledge` |
 | 모델 레지스트리 | 자연어 쿼리 기반 모델 탐색 | ChromaDB `maple_models` |
 
-### 3. 다단계 AI 파이프라인
+### 3. 에이전틱 general 오케스트레이션
 
-단일 요청으로 복수의 특화 모델이 순차 실행되는 파이프라인을 지원합니다.
+`general` 모드는 자연어 쿼리 + 첨부파일을 받아 **관련 모델을 스스로 찾아 실행하고 결과를 종합**합니다.
 
 ```
-예시: 뇌종양 분할
-  Step 1 — BraTS2020_FLAIR_UNet3D : FLAIR MRI에서 뇌종양 영역 분할
-  Step 2 — BraTS2020_T1ce_UNet3D  : T1ce MRI에서 Enhancing Tumor 분할
-  최종    — VLM 임상 해석           : 분할 결과 이미지 → 임상 소견 텍스트 생성
+POST /agent/plan (general)                (라우팅이 실행)            POST /agent/interpret
+  ↓ 의도분석 (신체부위·질환군)              DAG 실행 (병렬+순차)         ↓ 원본이미지+결과+메타
+  ↓ 하이브리드 후보 recall (벡터+키워드)  →  포맷 정합(DICOM→PNG 등)  →   ↓ VLM 종합 판독문
+  ↓ LLM 모델 선택 (매직 문턱 없음)            결과 집계                    ← [IMG:role] 인라인
+  ← execution_plan.steps[] (DAG)                                        (모델 0개면 VLM 단독)
 ```
 
-### 4. VLM 임상 해석 with 이미지 인라인 렌더링
+- **모델 탐색**: 단일 벡터 유사도 문턱 대신 **하이브리드 recall(벡터+메타 키워드) + LLM 선택**으로
+  교차언어 임베딩에서도 관련 모델을 놓치지 않음. 예: "폐렴 찾아줘" → YOLO(검출)+ChestXray14(분류) 동시.
+- **DAG 실행 계획**: 각 step에 `depends_on`(선행 step_id)을 담아 병렬/순차를 표현. 독립 모델은 병렬.
+- **의존 체인**: 모델 등록 시 `provides`/`requires` 태그로 "선행 출력이 필요한" 관계를 선언 → 자동 wiring.
+- 상세: [docs/agentic-general-mode.md](docs/agentic-general-mode.md)
+
+### 4. 다단계 AI 파이프라인 (DAG)
+
+단일 요청으로 복수의 특화 모델이 **병렬·순차 DAG**로 실행되는 파이프라인을 지원합니다.
+
+```
+예시: 뇌종양 분할 (병렬)
+  BraTS2020_FLAIR_UNet3D : FLAIR MRI 분할   ┐
+  BraTS2020_T1ce_UNet3D  : T1ce MRI 분할    ├─ 병렬 실행 (depends_on: [])
+  ...                                        ┘
+  최종 — VLM 임상 해석 : 분할 결과 이미지 → 임상 소견 텍스트 생성
+```
+
+### 5. VLM 임상 해석 with 이미지 인라인 렌더링
 
 ```
 Agent 해석 출력:
@@ -111,8 +130,8 @@ Agent 해석 출력:
 | BraTS2020_T1_UNet3D | 신경과 | NIfTI (T1) | 뇌종양 분할 오버레이 | 3D Segmentation |
 | BraTS2020_T1ce_UNet3D | 신경과 | NIfTI (T1ce) | 뇌종양 분할 오버레이 | 3D Segmentation |
 | BraTS2020_T2_UNet3D | 신경과 | NIfTI (T2) | 뇌종양 분할 오버레이 | 3D Segmentation |
-| ChestXray14_Multilabel_Classification | 영상의학과 | PNG/JPG | GradCAM 오버레이 + 14개 흉부 소견 확률 | Classification + XAI |
-| YOLO26x_RSNA_Pneumonia | 영상의학과 | DICOM | 폐렴 의심 영역 bbox 오버레이 | Object Detection |
+| ChestXray14_Multilabel_Classification | 호흡기내과(Pulmonology) | PNG/JPG | GradCAM 오버레이 + 14개 흉부 소견 확률 | Classification + XAI |
+| YOLO26x_RSNA_Pneumonia | 호흡기내과(Pulmonology) | DICOM | 폐렴 의심 영역 bbox 오버레이 | Object Detection |
 
 ---
 
@@ -123,20 +142,21 @@ maple-agent-server/
 ├── main.py                 # FastAPI 진입점 (Port 8101)
 ├── requirements.txt
 ├── .env.example
+├── docs/                   # 설계 문서 (agentic-general-mode.md 등)
 ├── wiki/                   # 지식 누적 레이어
 │   ├── index.md            # 전체 Wiki 목록
 │   ├── models/             # AI 모델별 페이지
 │   ├── departments/        # 진료과별 페이지
-│   └── interpretations/    # 누적 임상 해석 패턴
+│   └── interpretations/    # 누적 임상 해석 패턴 (런타임 산출물, gitignore)
 ├── services/
-│   ├── agent_service.py    # 핵심 오케스트레이션
+│   ├── agent_service.py    # 핵심 오케스트레이션 (plan/interpret, general DAG)
 │   ├── wiki_service.py     # Wiki 읽기/쓰기
 │   └── rag_service.py      # ChromaDB 병렬 검색
 ├── llm/
 │   ├── client.py           # vLLM OpenAI 호환 클라이언트
-│   └── prompts.py          # 프롬프트 템플릿
+│   └── prompts/            # 프롬프트 패키지 (system·builders·schemas·utils)
 ├── rag/
-│   ├── embedder.py         # ChromaDB upsert / delete / get
+│   ├── embedder.py         # ChromaDB upsert / delete / get_all_models
 │   └── retriever.py        # ChromaDB query + 결과 포맷
 └── routers/
     ├── agent.py            # /agent/plan, /agent/interpret
@@ -175,13 +195,27 @@ uvicorn main:app --host 0.0.0.0 --port 8101 --reload
 
 ```bash
 # 1. 임상 지식 베이스 구축 — PubMedQA·MedMCQA → ChromaDB maple_knowledge
+# 주의: 오래 걸림
 python scripts/ingest_knowledge.py
-
-# 2. AI 모델 등록 — AI_Models/ 스캔 → MongoDB + ChromaDB maple_models
-#    (maple-model-execution-server 디렉토리에서 실행)
-cd ../maple-model-execution-server
-python scan_and_register.py
 ```
+
+**2. AI 모델 등록 (ChromaDB `maple_models`)** — 두 경로 중 택1:
+
+```bash
+# (A) agent-server 단독/협업용 — MongoDB·타 레포 불필요
+#     scripts/register_models.py의 MODELS를 agent /register로 등록
+python scripts/register_models.py
+
+# (B) 전체 플랫폼 — MongoDB + AI_Models 원천(meta.json)까지 동기화
+#     scan_and_register.py는 maple-routing-server에 있고, AI_MODELS_DIR로
+#     ../maple-model-execution-server/AI_Models 를 읽는다
+cd ../maple-routing-server
+AGENT_URL=http://localhost:8101 python scan_and_register.py
+```
+
+> Agent 워크스페이스에서만 개발한다면 **(A)** 면 충분하다(등록은 ChromaDB+wiki만 씀 — MongoDB 불필요).
+> `register_models.py`는 model-execution-server `meta.json`을 미러링한 편의 스크립트이므로,
+> 모델이 바뀌면 (B)로 재등록하거나 이 파일을 갱신한다.
 
 ---
 
@@ -209,12 +243,20 @@ python scan_and_register.py
 
 ```json
 {
-  "query": "흉부 X-ray 폐렴 탐지 해줘",
-  "mode": "auto",
+  "query": "가슴 사진 폐렴인지 판독해줘",
+  "mode": "general",
   "uploaded_types": ["dicom"],
   "history": [],
-  "images": [],
-  "csv_data": []
+  "attachments": [
+    {
+      "type": "dicom",
+      "filename": "chest.dcm",
+      "images": ["data:image/png;base64,..."],
+      "text": "",
+      "metadata": {"modality": "CR", "body_part": "CHEST", "age": "075Y", "sex": "M"},
+      "tabular": null
+    }
+  ]
 }
 ```
 
@@ -222,9 +264,10 @@ python scan_and_register.py
 |---|---|---|---|
 | `query` | string | 필수 | 사용자 자연어 요청 |
 | `mode` | string | `"auto"` | `auto` \| `clinical` \| `prediction` \| `general` |
-| `uploaded_types` | string[] | `[]` | 업로드된 파일 타입 목록 (e.g. `["dicom"]`) |
-| `images` | string[] | `[]` | `general` 모드 — DICOM/NIfTI를 PNG로 변환한 base64 목록 |
-| `csv_data` | dict[] | `[]` | `general` 모드 — `pd.read_csv().to_dict("records")` 결과 |
+| `uploaded_types` | string[] | `[]` | 업로드된 파일 타입 목록 (e.g. `["dicom"]`). 비면 `attachments[].type`에서 파생 |
+| `attachments` | object[] | `[]` | 라우팅이 정규화한 첨부 — `{type, filename, images[], text, metadata, tabular}` (라우팅이 파싱·비식별화) |
+| `images` | string[] | `[]` | (레거시) `attachments` 이전 base64 이미지 목록 |
+| `csv_data` | dict[] | `[]` | (레거시) `pd.read_csv().to_dict("records")` 결과 |
 
 **모드별 동작**
 
@@ -232,8 +275,8 @@ python scan_and_register.py
 |---|---|
 | `prediction` | ChromaDB `maple_models` 검색 → required_data 매칭 → 실행 계획 반환 |
 | `clinical` | Wiki + RAG(PubMedQA·MedMCQA) 병렬 검색 → LLM 즉시 답변 |
-| `general` | 이미지(VLM) + CSV 수치 데이터 → gemma-4-31B-it 종합 분석 |
-| `auto` | images/csv_data 있으면 `general`; 없으면 LLM이 `prediction` / `clinical` / `general` 판단 |
+| `general` | 의도분석 → 하이브리드 모델 recall + LLM 선택 → DAG 실행계획 반환 (모델 0개면 VLM 단독 `message`) |
+| `auto` | 첨부 있으면 `general`; 없으면 LLM이 `prediction` / `clinical` / `general` 판단 |
 
 **Response**
 
@@ -243,7 +286,7 @@ python scan_and_register.py
   "status": "ready",
   "mode": "prediction",
   "execution_plan": {
-    "steps": [{"step": 1, "model": "YOLO26x_RSNA_Pneumonia", "department": "Radiology", "project": "RSNA_Pneumonia_YOLO26x"}]
+    "steps": [{"step": 1, "model": "YOLO26x_RSNA_Pneumonia", "department": "Pulmonology", "project": "RSNA_Pneumonia_YOLO26x"}]
   }
 }
 
@@ -254,14 +297,30 @@ python scan_and_register.py
 {"status": "no_model", "mode": "prediction", "message": "..."}
 
 // prediction — 파일 타입 불일치
-{"status": "type_mismatch", "mismatched_models": [{"model": "YOLO26x_RSNA_Pneumonia", "required": ["dicom"], "uploaded": ["csv"]}]}
+{"status": "type_mismatch", "mismatched_models": [{"model": "YOLO26x_RSNA_Pneumonia", "required": ["dcm"], "uploaded": ["csv"]}]}
 
 // clinical
 {"query_type": "knowledge", "mode": "clinical", "message": "...", "sources": [...], "model_suggestion": "..."}
 
-// general
-{"query_type": "general", "mode": "general", "message": "..."}
+// general — 모델 선택됨 (DAG 실행계획)
+{
+  "status": "ready",
+  "mode": "general",
+  "execution_plan": {
+    "steps": [
+      {"step_id": "s1", "model_name": "YOLO26x_RSNA_Pneumonia", "department": "Pulmonology", "project": "RSNA_Pneumonia_YOLO26x", "task_type": "bbox detection", "result_type": ["bbox_overlay", "detection_predictions"], "required_data": ["dcm"], "depends_on": []},
+      {"step_id": "s2", "model_name": "ChestXray14_Multilabel_Classification", "department": "Pulmonology", "project": "ChestXray14_Multilabel_Classification", "task_type": "classification", "result_type": ["gradcam_overlay", "classification_probabilities"], "required_data": ["png", "jpg", "jpeg"], "depends_on": []}
+    ]
+  },
+  "fallback_vlm_only": false,
+  "message": ""
+}
+
+// general — 매칭 모델 0개 (VLM 단독 fallback)
+{"status": "ready", "mode": "general", "execution_plan": {"steps": []}, "fallback_vlm_only": true, "message": "..."}
 ```
+
+> `general` 모드: `fallback_vlm_only: true`면 `steps: []` + `message`(VLM 답변)를 그대로 사용. `false`면 라우팅이 `execution_plan.steps[]`를 DAG로 실행한 뒤 `/agent/interpret`를 호출한다.
 
 ### POST `/agent/interpret`
 
@@ -269,20 +328,36 @@ python scan_and_register.py
 
 ```json
 {
-  "query": "흉부 X-ray 폐렴 탐지 해줘",
-  "task": {"department": "Radiology", "project": "RSNA_Pneumonia_YOLO26x"},
-  "execution_context": {"mode": "prediction", "plan": {}},
+  "query": "가슴 사진 폐렴인지 판독해줘",
+  "task": {"department": "Pulmonology", "project": "RSNA_Pneumonia_YOLO26x"},
+  "execution_context": {
+    "mode": "general",
+    "plan": {"steps": []},
+    "attachments": [
+      {"type": "dicom", "filename": "chest.dcm", "images": ["data:image/png;base64,..."], "metadata": {"modality": "CR", "body_part": "CHEST", "age": "075Y"}}
+    ]
+  },
   "step_results": [
     {
-      "step": 1,
+      "step": "s1",
       "model": "YOLO26x_RSNA_Pneumonia",
-      "result_type": "image",
-      "predictions": {"confidence": 0.87, "boxes": 2},
+      "result_type": ["bbox_overlay", "detection_predictions"],
+      "predictions": [{"pred_name": "pneumonia_opacity", "conf": 0.18}],
+      "model_output": {"detection_count": 2},
       "images": [{"role": "bbox_overlay", "data": "data:image/png;base64,..."}]
+    },
+    {
+      "step": "s2",
+      "model": "ChestXray14_Multilabel_Classification",
+      "result_type": ["gradcam_overlay", "classification_probabilities"],
+      "predictions": [{"finding": "Pneumonia", "prob": 0.61}],
+      "images": [{"role": "gradcam_overlay", "data": "data:image/png;base64,..."}]
     }
   ]
 }
 ```
+
+> `execution_context.attachments`는 **원본 스캔 이미지 + 메타데이터**로, general 종합 판독의 임상 컨텍스트로 VLM에 함께 투입된다. `step`은 prediction=순번(int), general DAG=step_id(str). `result_type`·`role`이 null이면 `""`로 흡수(422 방지).
 
 **Response**
 
@@ -308,18 +383,38 @@ python scan_and_register.py
 
 ```json
 {
-  "id": "radiology-rsna-pneumonia-yolo26x",
+  "id": "pulmonology-rsna-pneumonia-yolo26x",
   "model_name": "YOLO26x_RSNA_Pneumonia",
-  "department": "Radiology",
+  "department": "Pulmonology",
   "project": "RSNA_Pneumonia_YOLO26x",
-  "description": "폐렴성 폐 혼탁 탐지 모델. DICOM 흉부 X-ray를 입력받아 폐렴 의심 영역을 bounding box로 검출",
+  "description": "Pneumonia detection model on chest X-ray. DICOM 입력 → 폐렴 의심 영역 bbox 검출",
   "task_type": "bbox detection",
-  "required_data": ["dicom"],
-  "result_type": "image"
+  "disease": "pneumonia, lung opacity, chest x-ray",
+  "required_data": ["dcm"],
+  "result_type": ["bbox_overlay", "detection_predictions"],
+  "provides": [],
+  "requires": []
 }
 ```
 
+**필드**
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `id` | string | ChromaDB 문서 id |
+| `model_name` / `department` / `project` | string | 모델 식별·실행 호출 키 |
+| `description` | string | 모델 설명 (임베딩·LLM 선택에 사용 — 다루는 소견을 영어로 명시 권장) |
+| `task_type` | string | `bbox detection` \| `classification` \| `segmentation` … |
+| `disease` | string | 대상 질환·소견 키워드 (콤마 구분) — general 키워드 recall에 사용 |
+| `required_data` | string[] | 입력 파일 확장자 (e.g. `["dcm"]`, `["png","jpg","jpeg"]`, `["nii.gz","nii"]`) |
+| `result_type` | string[] | 출력 타입 목록 (e.g. `["bbox_overlay","detection_predictions"]`) |
+| `provides` / `requires` | string[] | DAG 체인 태그 (기본 `[]`) |
+
 → `wiki/models/RSNA_Pneumonia_YOLO26x/YOLO26x_RSNA_Pneumonia.md` 생성 + `wiki/index.md` 업데이트 + ChromaDB `maple_models` 등록 자동 수행
+
+> `provides`/`requires`: general DAG 체인 구성용 태그. consumer의 `requires`를 provider의 `provides`와
+> 정확 문자열 매칭해 `depends_on`을 자동 도출한다(예: 검출모델 `provides:["sij_roi"]` → 분류모델 `requires:["sij_roi"]`).
+> 독립 모델은 빈 배열.
 
 ---
 
@@ -350,13 +445,24 @@ POST /agent/plan {mode: "clinical", query}
   ← {message, sources, model_suggestion}
 ```
 
-### general 모드
+### general 모드 (에이전틱 오케스트레이션)
 
 ```
-POST /agent/plan {mode: "general", query, images, csv_data}
-  ↓ 이미지 있으면 VLM, 없으면 LLM → 종합 분석
-  ← {message}
+POST /agent/plan {mode: "general", query, attachments}
+  ↓ 의도분석 (신체부위·질환군·영어 검색쿼리)
+  ↓ 하이브리드 후보 recall (벡터 + 메타 키워드) → LLM 모델 선택
+  ↓ provides/requires 기반 DAG 실행계획 생성
+  ← {execution_plan: {steps: [...]}, fallback_vlm_only}
+     (모델 0개면 fallback_vlm_only=true + message에 VLM 단독 답변)
+
+(라우팅이 DAG 실행 — 병렬/순차 + 포맷 정합(DICOM→PNG 등) → 결과 집계 후)
+
+POST /agent/interpret {query, step_results, execution_context.attachments}
+  ↓ 원본 스캔 이미지+메타 + 모델 결과 → VLM 종합 판독문
+  ← {interpretation, images}
 ```
+
+상세: [docs/agentic-general-mode.md](docs/agentic-general-mode.md)
 
 ---
 
@@ -368,10 +474,10 @@ POST /agent/plan {mode: "general", query, images, csv_data}
 # Maple AI Agent Wiki Index
 
 ## Models
-- [[RSNA_Pneumonia_YOLO26x/YOLO26x_RSNA_Pneumonia]] - Radiology
+- [[RSNA_Pneumonia_YOLO26x/YOLO26x_RSNA_Pneumonia]] - Pulmonology
 
 ## Departments
-- [[Radiology]]
+- [[Pulmonology]]
 
 ## Interpretations
 - [[RSNA_Pneumonia_YOLO26x/YOLO26x_RSNA_Pneumonia/20260525_...]]
@@ -383,9 +489,10 @@ POST /agent/plan {mode: "general", query, images, csv_data}
 # ModelName
 
 ## 기본 정보
-- **진료과:** Radiology
+- **진료과:** Pulmonology
 - **task_type:** bbox detection
-- **required_data:** [dicom]
+- **required_data:** [dcm]
+- **result_type:** [bbox_overlay, detection_predictions]
 
 ## 임상 해석 패턴
 ### [2026-04-15] 해석 패턴
