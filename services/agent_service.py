@@ -257,7 +257,7 @@ async def _prediction(query: str, uploaded_types: list[str]) -> dict:
             "department": m.get("department", ""),
             "project": m.get("project", ""),
             "task_type": m.get("task_type", ""),
-            "result_type": m.get("result_type", ""),
+            "result_type": _get_list_field(m, "result_type"),
         }
         for i, m in enumerate(matched)
     ]
@@ -572,7 +572,7 @@ def _build_execution_dag(selected: list[dict]) -> list[dict]:
             "department": m.get("department", ""),
             "project": m.get("project", ""),
             "task_type": m.get("task_type", ""),
-            "result_type": m.get("result_type", ""),
+            "result_type": _get_list_field(m, "result_type"),
             "required_data": _get_required_data(m, m.get("model_name", "")),
             "depends_on": n["depends_on"],
         })

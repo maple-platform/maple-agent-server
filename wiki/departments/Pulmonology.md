@@ -1,4 +1,4 @@
-# Radiology
+# Pulmonology
 
 ## 모델 목록
 - [[ChestXray14_Multilabel_Classification/ChestXray14_Multilabel_Classification]]

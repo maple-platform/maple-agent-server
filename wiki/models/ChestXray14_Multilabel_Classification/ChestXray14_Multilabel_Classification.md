@@ -1,14 +1,16 @@
 # ChestXray14_Multilabel_Classification
 
 ## 기본 정보
-- **진료과:** Radiology
+- **진료과:** Pulmonology
 - **프로젝트:** ChestXray14_Multilabel_Classification
 - **task_type:** classification
-- **required_data:** [image]
-- **result_type:** image
+- **required_data:** [png, jpg, jpeg]
+- **result_type:** [gradcam_overlay, classification_probabilities]
+- **provides:** []
+- **requires:** []
 
 ## 설명
-Radiology chest X-ray abnormality classification model. PNG/JPG chest X-ray image input is analyzed with TorchXRayVision resnet50-res512-all to return a Grad-CAM overlay image plus multi-label classification probabilities for 14 thoracic findings.
+Chest X-ray multi-label classification model (TorchXRayVision resnet50-res512-all). Analyzes a PNG/JPG chest X-ray and returns a Grad-CAM overlay plus per-finding probabilities for 14 thoracic findings: atelectasis, cardiomegaly, effusion, infiltration, mass, nodule, pneumonia, pneumothorax, consolidation, edema, emphysema, fibrosis, pleural thickening, and hernia.
 
 ## 임상 해석 패턴
 

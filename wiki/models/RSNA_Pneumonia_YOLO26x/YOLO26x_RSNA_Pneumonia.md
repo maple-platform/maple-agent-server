@@ -1,14 +1,16 @@
 # YOLO26x_RSNA_Pneumonia
 
 ## 기본 정보
-- **진료과:** Radiology
+- **진료과:** Pulmonology
 - **프로젝트:** RSNA_Pneumonia_YOLO26x
 - **task_type:** bbox detection
-- **required_data:** [dicom]
-- **result_type:** image
+- **required_data:** [dcm]
+- **result_type:** [bbox_overlay, detection_predictions]
+- **provides:** []
+- **requires:** []
 
 ## 설명
-폐렴성 폐 혼탁(pneumonia-related lung opacity) 탐지 모델. DICOM 흉부 X-ray를 입력받아 폐렴 의심 영역을 bounding box로 검출하고 overlay 이미지를 반환한다.
+Pneumonia detection model on chest X-ray. Takes a DICOM chest X-ray and detects pneumonia-related lung opacity regions, returning bounding-box overlay images. For pneumonia / lung opacity screening on chest radiographs.
 
 ## 임상 해석 패턴
 

@@ -4,11 +4,13 @@
 - **진료과:** Neurology
 - **프로젝트:** BraTS2020_T1ce_UNet3D
 - **task_type:** segmentation
-- **required_data:** [nifti]
-- **result_type:** image
+- **required_data:** [nii.gz, nii]
+- **result_type:** [segmentation_overlay, 3d_overlay]
+- **provides:** []
+- **requires:** []
 
 ## 설명
-뇌종양 자동 분할 모델. NIfTI MRI 영상(T1ce (T1 Contrast-Enhanced) 모달리티)을 입력받아 Whole Tumor(WT), Tumor Core(TC), Enhancing Tumor(ET) 3개 영역의 axial slice overlay 이미지를 반환한다.
+Brain tumor segmentation model. Takes a T1 contrast-enhanced (T1ce) NIfTI brain MRI and returns axial-slice overlay images segmenting three sub-regions: Whole Tumor (WT), Tumor Core (TC), and Enhancing Tumor (ET). For glioma / glioblastoma (BraTS).
 
 ## 임상 해석 패턴
 
