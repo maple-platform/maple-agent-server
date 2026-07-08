@@ -1,6 +1,6 @@
 import re
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from services import wiki_service
 from rag import embedder
@@ -17,9 +17,19 @@ class ModelRegisterRequest(BaseModel):
     task_type: str
     disease: str
     required_data: list[str]
-    result_type: str
+    result_type: list[str]     # 출력 타입 목록 (예: ["bbox_overlay", "detection_predictions"])
     provides: list[str] = []   # 이 모델이 산출하는 상위 출력 태그 (예: ["sij_roi"])
     requires: list[str] = []   # 선행으로 필요한 상위 출력 태그 (예: ["sij_roi"])
+
+    @field_validator("result_type", mode="before")
+    @classmethod
+    def _result_type_to_list(cls, value):
+        # 하위호환: 문자열/None으로 와도 리스트로 정규화
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [v.strip() for v in value.split(",") if v.strip()]
+        return value
 
 
 @router.post("/register")
@@ -56,7 +66,7 @@ async def register_model(req: ModelRegisterRequest):
         f"질환: {req.disease}\n"
         f"task_type: {req.task_type}\n"
         f"required_data: {', '.join(req.required_data)}\n"
-        f"result_type: {req.result_type}"
+        f"result_type: {', '.join(req.result_type)}"
     )
     embedder.upsert_model(
         model_id=req.id,
@@ -67,7 +77,7 @@ async def register_model(req: ModelRegisterRequest):
             "project": req.project,
             "task_type": req.task_type,
             "required_data": ", ".join(req.required_data),
-            "result_type": req.result_type,
+            "result_type": ", ".join(req.result_type),
             "provides": ", ".join(req.provides),
             "requires": ", ".join(req.requires),
         },

@@ -99,11 +99,12 @@ def search_wiki(query: str) -> str:
 
 def write_model_page(model_name: str, department: str, project: str,
                      description: str, task_type: str, disease: str,
-                     required_data: list[str], result_type: str,
+                     required_data: list[str], result_type: list[str] | str,
                      provides: list[str] | None = None,
                      requires: list[str] | None = None) -> None:
     _ensure_dirs()
     required_str = ", ".join(required_data)
+    result_str = ", ".join(result_type) if isinstance(result_type, list) else result_type
     provides_str = ", ".join(provides or [])
     requires_str = ", ".join(requires or [])
     content = f"""# {model_name}
@@ -113,7 +114,7 @@ def write_model_page(model_name: str, department: str, project: str,
 - **프로젝트:** {project}
 - **task_type:** {task_type}
 - **required_data:** [{required_str}]
-- **result_type:** {result_type}
+- **result_type:** [{result_str}]
 - **provides:** [{provides_str}]
 - **requires:** [{requires_str}]
 

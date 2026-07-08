@@ -67,10 +67,20 @@ class StepResult(BaseModel):
     model_output: Any = Field(default_factory=dict)      # ROI 좌표, 분류 상세, segmentation 메타, raw text 등
     images: list[ImageResult | dict | str] = Field(default_factory=list)
 
-    @field_validator("model", "result_type", mode="before")
+    @field_validator("model", mode="before")
     @classmethod
     def _none_to_str(cls, value):
         return "" if value is None else value
+
+    @field_validator("result_type", mode="before")
+    @classmethod
+    def _result_type_to_str(cls, value):
+        # 컨테이너/모델메타가 null 또는 리스트로 보내도 문자열로 정규화
+        if value is None:
+            return ""
+        if isinstance(value, list):
+            return ", ".join(str(v) for v in value)
+        return value
 
     @field_validator("images", mode="before")
     @classmethod
