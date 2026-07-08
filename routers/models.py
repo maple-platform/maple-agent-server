@@ -18,6 +18,8 @@ class ModelRegisterRequest(BaseModel):
     disease: str
     required_data: list[str]
     result_type: str
+    provides: list[str] = []   # 이 모델이 산출하는 상위 출력 태그 (예: ["sij_roi"])
+    requires: list[str] = []   # 선행으로 필요한 상위 출력 태그 (예: ["sij_roi"])
 
 
 @router.post("/register")
@@ -32,6 +34,8 @@ async def register_model(req: ModelRegisterRequest):
         disease=req.disease,
         required_data=req.required_data,
         result_type=req.result_type,
+        provides=req.provides,
+        requires=req.requires,
     )
 
     # 2. 진료과 페이지 업데이트
@@ -64,6 +68,8 @@ async def register_model(req: ModelRegisterRequest):
             "task_type": req.task_type,
             "required_data": ", ".join(req.required_data),
             "result_type": req.result_type,
+            "provides": ", ".join(req.provides),
+            "requires": ", ".join(req.requires),
         },
     )
 

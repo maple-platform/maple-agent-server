@@ -16,6 +16,9 @@
 **/chroma.log
 **/*.log
 
+# Wiki 런타임 산출물 (해석 로그 — 실행마다 누적)
+wiki/interpretations/
+
 # Claude Code
 .claude/
 

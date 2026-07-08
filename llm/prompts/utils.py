@@ -40,3 +40,31 @@ def to_pretty_json(data: Any) -> str:
     Convert Python objects into pretty JSON for prompt context.
     """
     return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+def format_dicom_age(value: Any) -> str:
+    """
+    Convert a DICOM PatientAge string (e.g. "045Y", "006M") into a readable form.
+    Passes through non-matching values (e.g. "90+") unchanged.
+    """
+    match = re.fullmatch(r"0*(\d+)\s*([YMWD])", str(value).strip(), re.IGNORECASE)
+    if not match:
+        return str(value)
+    n = int(match.group(1))
+    unit = match.group(2).upper()
+    return {"Y": f"{n}세", "M": f"{n}개월", "W": f"{n}주", "D": f"{n}일"}[unit]
+
+
+def format_metadata(meta: dict) -> str:
+    """
+    Flatten a metadata dict into a readable "key=value, ..." string for prompts.
+    Age fields are humanized; nested dict/list values are JSON-encoded.
+    """
+    parts = []
+    for key, value in meta.items():
+        if key.lower() in ("age", "patient_age", "patientage"):
+            value = format_dicom_age(value)
+        elif isinstance(value, (dict, list)):
+            value = json.dumps(value, ensure_ascii=False)
+        parts.append(f"{key}={value}")
+    return ", ".join(parts)
