@@ -13,6 +13,7 @@
 Pneumonia detection model on chest X-ray. Takes a DICOM chest X-ray and detects pneumonia-related lung opacity regions, returning bounding-box overlay images. For pneumonia / lung opacity screening on chest radiographs.
 
 ## 임상 해석 패턴
+- 2026-07-14 해석 완료 (RSNA_Pneumonia_YOLO26x/YOLO26x_RSNA_Pneumonia/20260714_141204381124.md)
 
 ## 관련 개념
 pneumonia, lung opacity, chest X-ray

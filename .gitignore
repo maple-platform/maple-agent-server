@@ -17,7 +17,7 @@
 **/*.log
 
 # Wiki 런타임 산출물 (해석 로그 — 실행마다 누적)
-wiki/interpretations/
+# wiki/interpretations/
 
 # Claude Code
 .claude/
