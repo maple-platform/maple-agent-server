@@ -1,26 +1,34 @@
 # maple-platform
 
 의료 전문가가 AI 모델과 대화하듯 상호작용하는 **임상 AI 플랫폼**입니다.
-도메인 특화 AI 모델 실행, RAG 기반 임상 지식 검색, 첨부파일 종합 분석(에이전틱 오케스트레이션)을 하나의 채팅 인터페이스에서 제공합니다.
+도메인 특화 AI 모델 실행, RAG 기반 임상 지식 검색, Wiki, 첨부파일 종합 분석(에이전틱 오케스트레이션)을 하나의 채팅 인터페이스에서 제공합니다.
 
 ---
 
 ## 시스템 구성
 
+Cloud GPU 서버 2대 + 로컬 클라이언트로 구성된다.
+
 ```
-[maple-client]         React + Electron UI (Port 3000)
-        │
-        │  HTTP
-        ▼
-[maple-routing-server] FastAPI 백엔드 (Port 8100)
-        │
-        ├── HTTP ──────► [maple-model-execution-server] AI 모델 컨테이너 (Port 9020~9023)
-        │
-        └── SSH 터널 ──► [maple-agent-server] AI Agent (NHN Cloud B200, Port 8101)  ◄── 이 저장소
-                                ├── vLLM  (Port 8011, gemma-4-31B-it, B200 ×2 텐서 병렬)
-                                ├── ChromaDB  (Port 8010, 벡터 RAG)
-                                └── /wiki  (마크다운 지식 누적 레이어)
+[maple-client]  로컬(노트북) — React + Electron UI
+      │  HTTP
+      ▼
+── GPU 서버 A · A100 ×1 ──────────────────────────────────────────────
+   [maple-routing-server]          FastAPI 백엔드 (Port 8100)
+   [maple-model-execution-server]  AI 모델 컨테이너 (Docker, Port 9020~9023)
+──────────────────────────────────────────────────────────────────────
+      │  사설망 직접 통신 (인터넷 미경유)
+      │  라우팅 → Agent 호출
+      ▼
+── GPU 서버 B · H100 ×1  ◄ 이 저장소 ─────────────────────────────────
+   [maple-agent-server]  AI Agent (Port 8101)
+       ├── vLLM      (Port 8011, gemma-4-31B-it)
+       ├── ChromaDB  (Port 8010, 벡터 RAG)
+       └── /wiki     (마크다운 지식 누적 레이어)
+──────────────────────────────────────────────────────────────────────
 ```
+
+
 
 | 저장소 | 역할 |
 |---|---|
@@ -64,6 +72,29 @@ gemma-4-31B-it → 임상 응답 생성
 | Wiki | AI 모델 메타데이터, 임상 해석 패턴 누적 | `/wiki/*.md` |
 | RAG | PubMedQA·MedMCQA 논문/QA 벡터 검색 | ChromaDB `maple_knowledge` |
 | 모델 레지스트리 | 자연어 쿼리 기반 모델 탐색 | ChromaDB `maple_models` |
+
+#### Wiki 디렉터리 — 무엇이 어디에 쌓이나
+
+| 경로 | 생성 시점 | 내용 |
+|---|---|---|
+| `index.md` | 모델 등록 | 전체 목록 — Models/Departments 섹션에 `[[project/model]]` 링크 |
+| `models/{project}/{model}.md` | 모델 등록 (`/register`) | 모델 **메타데이터 카드 + 해석 실행 이력**(아래) |
+| `departments/{dept}.md` | 모델 등록 | 진료과별 소속 모델 목록 |
+| `interpretations/{project}/{model}/{timestamp}.md` | interpret 실행 | VLM 임상 **판독문 전문**(실행 1회 = 파일 1개, 누적) |
+| `concepts/{topic}.md` | clinical 답변 | 임상 지식 Q&A 캐시(같은 토픽이면 덮어씀) |
+| `log.md` | 등록/삭제 | 이력 로그 (**gitignore**) |
+
+**`models/….md` 에 남는 것** — "이 모델이 무엇인가"를 서술하는 정적 카드 + 해석이 언제 돌았는지의 인덱스:
+- `기본 정보`: 진료과 · 프로젝트 · task_type · required_data · result_type · **provides / requires**(DAG 의존 태그)
+- `설명`: 모델 용도 설명
+- `임상 해석 패턴`: interpret가 돌 때마다 `- {날짜} 해석 완료 (…/{timestamp}.md)` 한 줄씩 추가 → 전문 파일로 링크
+- `관련 개념`: 질환·키워드
+
+**`interpretations/…/{timestamp}.md` 에 남는 것** — interpret가 생성한 **판독문 본문 그대로**:
+- `## Summary` · `## Key Imaging Findings`(모델별 결과 표 + `[IMG:role]` 이미지 마커) · `## Clinical Interpretation` · `## Recommendations or Limitations`
+- 파일명 `YYYYMMDD_HHMMSSffffff.md`, 덮어쓰지 않고 실행마다 누적(추적 대상) → 해석이 쌓일수록 지식이 축적
+
+> 요약: **`models/` = 모델 정의(메타) + 해석 인덱스**, **`interpretations/` = 그때 실제로 낸 판독문(본문)**. 모델 페이지는 가볍게 유지하고 무거운 전문은 날짜별 파일로 분리한다.
 
 ### 3. 에이전틱 general 오케스트레이션
 
@@ -111,7 +142,7 @@ Agent 해석 출력:
 
 | 분류 | 기술 | 세부 내용 |
 |---|---|---|
-| **LLM / VLM** | vLLM + gemma-4-31B-it | NHN Cloud B200 ×2, 텐서 병렬(TP=2), FP16 |
+| **LLM / VLM** | vLLM + gemma-4-31B-it | NHN Cloud H100 ×1, TP=1, bf16 |
 | **벡터 DB** | ChromaDB 0.5 | 모델 레지스트리 + 임상 논문 RAG |
 | **임베딩** | sentence-transformers `all-MiniLM-L6-v2` | 쿼리·모델 설명 벡터화 |
 | **AI 프레임워크** | FastAPI + asyncio | 전구간 비동기, 병렬 RAG 검색 |
@@ -134,6 +165,8 @@ Agent 해석 출력:
 | YOLO26x_RSNA_Pneumonia | 호흡기내과(Pulmonology) | DICOM | 폐렴 의심 영역 bbox 오버레이 | Object Detection |
 
 ---
+> (추가 예정)
+
 
 ## 폴더 구조
 
@@ -147,7 +180,7 @@ maple-agent-server/
 │   ├── index.md            # 전체 Wiki 목록
 │   ├── models/             # AI 모델별 페이지
 │   ├── departments/        # 진료과별 페이지
-│   └── interpretations/    # 누적 임상 해석 패턴 (런타임 산출물, gitignore)
+│   └── interpretations/    # interpret 판독문 전문 — 실행마다 날짜별 1파일 누적
 ├── services/
 │   ├── agent_service.py    # 핵심 오케스트레이션 (plan/interpret, general DAG)
 │   ├── wiki_service.py     # Wiki 읽기/쓰기
@@ -167,31 +200,38 @@ maple-agent-server/
 
 ## 빠른 시작
 
+> **상시 운영(tmux 상주)·GPU 드라이버·경로 배치 등 이 서버(H100 단독, `ai-s-c16-33`) 배포 전반은 [`docs/deploy-h100.md`](docs/deploy-h100.md)를 참고.** 아래는 각 구성요소를 수동 기동할 때의 명령이다.
+
 ```bash
-source maple-agent-venv/bin/activate
+# 이 서버는 conda env 2개로 분리 사용 — 각 터미널에서 해당 env를 활성화한다.
+#   maple-agent : vLLM 전용             (pydantic 2.13)
+#   maple-app   : ChromaDB + FastAPI 앱 (pydantic 2.9.2)
+#   ※ 섞으면 vLLM이 올린 pydantic 때문에 chromadb 0.5.20이 깨진다(등록/조회 422·400).
 
-# 터미널 1 — ChromaDB
-chroma run --host 0.0.0.0 --port 8010 --path ./chroma_data
+# 터미널 1 — ChromaDB   (경로는 반드시 절대경로! 상대경로면 빈 DB가 새로 생겨 모델 0개가 된다)
+conda activate maple-app
+chroma run --host 0.0.0.0 --port 8010 --path /data/maple/chroma_data
 
-# 터미널 2 — vLLM (B200 ×2 텐서 병렬)
+# 터미널 2 — vLLM
+#   시스템 CUDA 툴킷(/usr/local/cuda)이 없어, flashinfer JIT가 쓰는 nvcc/ninja를 conda·pip에서
+#   끌어와야 한다. 아래 env 없이 그냥 실행하면 "Engine core initialization failed"로 죽는다.
+conda activate maple-agent
+export CUDA_HOME=$CONDA_PREFIX/lib/python3.10/site-packages/nvidia/cu13   # nvcc (ninja는 env/bin)
+export PATH=$CUDA_HOME/bin:$PATH
+export VLLM_USE_FLASHINFER_SAMPLER=0                                       # flashinfer 샘플러 JIT 회피
 python -m vllm.entrypoints.openai.api_server \
   --model google/gemma-4-31B-it \
-  --tensor-parallel-size 2 \
+  --tensor-parallel-size 1 \
   --port 8011 \
   --max-model-len 8192
-
-# CUDA_VISIBLE_DEVICES=1 python -m vllm.entrypoints.openai.api_server \
-#   --model google/gemma-4-31B-it \
-#   --port 8003 \
-#   --max-model-len 8192 \
-#   --tensor-parallel-size 1
-
+# (B200 ×2면 --tensor-parallel-size 2, 위 CUDA_HOME/VLLM_* env는 불필요)
 
 # 터미널 3 — Agent 서버
+conda activate maple-app
 uvicorn main:app --host 0.0.0.0 --port 8101 --reload
 ```
 
-### 최초 실행 시 (1회)
+### 최초 실행 시 (1회, 현 H100 서버에는 이미 해둬서 안해도 됨)
 
 ```bash
 # 1. 임상 지식 베이스 구축 — PubMedQA·MedMCQA → ChromaDB maple_knowledge
