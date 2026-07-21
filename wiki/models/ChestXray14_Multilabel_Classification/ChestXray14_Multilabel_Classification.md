@@ -13,6 +13,8 @@
 Chest X-ray multi-label classification model (TorchXRayVision resnet50-res512-all). Analyzes a PNG/JPG chest X-ray and returns a Grad-CAM overlay plus per-finding probabilities for 14 thoracic findings: atelectasis, cardiomegaly, effusion, infiltration, mass, nodule, pneumonia, pneumothorax, consolidation, edema, emphysema, fibrosis, pleural thickening, and hernia.
 
 ## 임상 해석 패턴
+- 2026-07-18 해석 완료 (ChestXray14_Multilabel_Classification/ChestXray14_Multilabel_Classification/20260718_142232533187.md)
+- 2026-07-16 해석 완료 (ChestXray14_Multilabel_Classification/ChestXray14_Multilabel_Classification/20260716_140918160162.md)
 - 2026-07-14 해석 완료 (ChestXray14_Multilabel_Classification/ChestXray14_Multilabel_Classification/20260714_141204383301.md)
 - 2026-07-13 해석 완료 (ChestXray14_Multilabel_Classification/ChestXray14_Multilabel_Classification/20260713_194749113668.md)
 
