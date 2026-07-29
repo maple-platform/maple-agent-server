@@ -1,9 +1,11 @@
 import json
 import logging
+import os
 import re
 import httpx
+import yaml
 
-from services import wiki_service
+from services import wiki_service, board_service
 from services.rag_service import retrieve
 from rag.retriever import search_models
 from rag import embedder
@@ -724,83 +726,139 @@ async def interpret(
         step_image_logs,
     )
 
-    # 3. 프롬프트 생성 (이미지 role 목록 포함)
-    prompt = build_interpret_prompt(
-        query, task, execution_context, step_results, wiki_context,
-        image_roles=image_roles,
-    )
+    board_mode = os.getenv("BOARD_MODE", "on").strip().lower()
+    if board_mode not in {"on", "off"}:
+        logger.warning("[interpret] invalid BOARD_MODE=%r; using 'on'", board_mode)
+        board_mode = "on"
+    if board_mode == "off":
+        return await _interpret_without_board(
+            query=query,
+            task=task,
+            execution_context=execution_context,
+            step_results=step_results,
+            wiki_context=wiki_context,
+            raw_images=raw_images,
+            image_roles=image_roles,
+            image_map=image_map,
+            model_names=model_names,
+        )
 
-    # 4. 이미지가 있으면 VLM, 없으면 텍스트 LLM
+    # 3. Board 실행 (Orchestrator) — Reader→Challenger→Evidence→Guardian→Calibration→Escalation
+    #    각 _run_* 은 try/except로 감싸 실패 시 즉시 pending_review 강제 (fail-safe)
+    board_failed = False
+
     try:
-        if raw_images:
-            interpretation = await llm_client.generate_with_images(prompt, raw_images, system=SYSTEM_INTERPRET)
-        else:
-            interpretation = await llm_client.generate(prompt, system=SYSTEM_INTERPRET)
-    except httpx.HTTPStatusError as e:
-        detail = e.response.text[:300] if e.response is not None else str(e)
-        fallback_prompt = (
-            f"{prompt}\n\n"
-            "## 시스템 참고\n"
-            "첨부 이미지의 VLM 해석 요청이 실패하여 텍스트 형태의 모델 출력만 기반으로 해석하세요. "
-            "응답은 반드시 영어로 작성하세요. "
-            f"LLM 오류 요약:{detail}"
+        reader_out = await board_service._run_reader(
+            query, task, execution_context, step_results, wiki_context,
+            raw_images, image_roles,
         )
-        interpretation = await llm_client.generate(fallback_prompt, system=SYSTEM_INTERPRET)
-    except httpx.HTTPError as e:
-        logger.exception("[interpret] LLM/VLM HTTP error")
-        fallback_prompt = (
-            f"{prompt}\n\n"
-            "## 시스템 참고\n"
-            "첨부 이미지의 LLM/VLM 요청 중 네트워크 또는 타임아웃 오류가 발생하여 "
-            "텍스트 형태의 모델 출력만 기반으로 해석을 시도합니다. "
-            "응답은 반드시 영어로 작성하세요. "
-            f"LLM 오류 요약:{type(e).__name__}: {e}"
-        )
-        try:
-            interpretation = await llm_client.generate(fallback_prompt, system=SYSTEM_INTERPRET)
-        except Exception:
-            logger.exception("[interpret] fallback text generation also failed")
-            interpretation = ""
-    except Exception as e:
-        logger.exception("[interpret] unexpected error during interpretation generation")
-        interpretation = ""
+    except Exception:
+        logger.exception("[board] reader failed")
+        reader_out, board_failed = _empty_reader(), True
 
-    if _needs_interpretation_retry(interpretation):
-        retry_prompt = (
-            f"{prompt}\n\n"
-            "## 재출력 지시\n"
-            "The previous response did not contain enough analytic text. Rewrite it in English with sufficient clinical interpretation.\n"
-            "- Include all four sections: `## Summary`, `## Key Imaging Findings`, `## Clinical Interpretation`, and `## Recommendations or Limitations`.\n"
-            "- 각 섹션은 최소 2문장 이상 작성하세요.\n"
-            "- 이미지 토큰만 나열하지 말고, 실제 해석 문장을 중심으로 작성하세요.\n"
-            "- `[IMG:role]` 토큰은 설명 문장 뒤에 배치하되, 본문 분석을 대체하면 안 됩니다."
-        )
+    if not board_failed:
         try:
-            if raw_images:
-                interpretation = await llm_client.generate_with_images(retry_prompt, raw_images, system=SYSTEM_INTERPRET)
-            else:
-                interpretation = await llm_client.generate(retry_prompt, system=SYSTEM_INTERPRET)
+            challenger_out = await board_service._run_challenger(
+                query, task, step_results, wiki_context, raw_images,
+                alt_model_output=None,
+            )
         except Exception:
-            logger.exception("[interpret] retry generation failed")
-            interpretation = ""
+            logger.exception("[board] challenger failed")
+            challenger_out, board_failed = _empty_challenger(), True
+    else:
+        challenger_out = _empty_challenger()
 
-    if _needs_interpretation_retry(interpretation):
+    if not board_failed:
+        try:
+            evidence_out = await board_service._run_evidence(
+                query, reader_out.get("claims", []), challenger_out.get("differential", []),
+            )
+        except Exception:
+            logger.exception("[board] evidence failed")
+            evidence_out, board_failed = _empty_evidence(), True
+    else:
+        evidence_out = _empty_evidence()
+
+    if not board_failed:
+        try:
+            guardian_out = await board_service._run_guardian(
+                query, task, step_results, reader_out, challenger_out, evidence_out,
+                raw_images,
+            )
+        except Exception:
+            logger.exception("[board] guardian failed")
+            guardian_out, board_failed = _empty_guardian(), True
+    else:
+        guardian_out = _empty_guardian()
+
+    # Calibration
+    confidence = _build_confidence(reader_out.get("claims", []), step_results)
+    calib = _calibrate(reader_out, challenger_out, guardian_out, confidence)
+
+    # Escalation 게이트
+    if board_failed:
+        status = "pending_review"
+        escalation_reason = "board_component_failure"
+    else:
+        status, escalation_reason = _decide_escalation(calib)
+
+    # 최종 조립 — UI용 5필드와 기존 markdown 호환 필드를 함께 반환
+    structured_result = _synthesize_final(
+        reader_out, evidence_out, challenger_out, guardian_out, confidence,
+    )
+    interpretation = _render_legacy_interpretation(structured_result)
+
+    board = {
+        "reader": {
+            "finding": reader_out.get("finding", ""),
+            "interpretation": reader_out.get("interpretation", ""),
+            "recommendation": reader_out.get("recommendation", ""),
+            "claims": reader_out.get("claims", []),
+        },
+        "challenger": {
+            "differential": challenger_out.get("differential", []),
+            "source": challenger_out.get("source", "blind_same_model"),
+        },
+        "evidence": {
+            "evidence_map": evidence_out.get("evidence_map", []),
+            "unsupported_claims": evidence_out.get("unsupported_claims", []),
+        },
+        "guardian": guardian_out,
+        "calibration": {
+            "agreement_score": calib.get("agreement_score"),
+            "score_gap": calib.get("score_gap"),
+            "model_conflict": calib.get("model_conflict", False),
+        },
+    }
+
+    # 구조화 본문 품질이 부족하면 보수적 폴백 + 사람 검토 요청
+    if _needs_structured_result_retry(structured_result):
         logger.warning(
-            "[interpret] model output still lacks analysis text after retry; applying server fallback"
+            "[interpret] synthesized text lacks analysis; applying server fallback"
         )
-        interpretation = _build_interpretation_fallback(
+        fallback_text = _build_interpretation_fallback(
             task=task,
             step_results=step_results,
             image_roles=image_roles,
         )
+        structured_result = {
+            **structured_result,
+            "finding": fallback_text,
+            "interpretation": "",
+            "recommendation": "전체 원본 영상과 임상 정보를 바탕으로 전문의 검토가 필요합니다.",
+        }
+        interpretation = _render_legacy_interpretation(structured_result)
+        status = "pending_review"
+        escalation_reason = escalation_reason or "insufficient_board_output"
 
     interpretation = _ensure_all_image_tokens(interpretation, image_roles)
     token_count = len(re.findall(r"\[IMG:[^\]]+\]", interpretation))
     logger.info(
-        "[interpret] output token_count=%s image_keys=%s roles=%s",
+        "[interpret] output token_count=%s image_keys=%s roles=%s status=%s",
         token_count,
         len(image_map),
         image_roles,
+        status,
     )
 
     # 5. Wiki에 해석 패턴 누적 — 파이프라인의 모든 모델에 저장
@@ -812,10 +870,384 @@ async def interpret(
             wiki_service.append_log("interpret", f"{project}/{model_name} 결과 해석 완료")
 
     return {
+        "status": status,
+        "result": structured_result,
         "interpretation": interpretation,
         "interpretation_raw": interpretation,
+        "board": board,
+        "escalation_reason": escalation_reason,
         "images": image_map,
     }
+
+
+# ── Board 오케스트레이터 헬퍼 ─────────────────────────────────────────────────────
+
+async def _interpret_without_board(
+    query: str,
+    task: dict,
+    execution_context: dict,
+    step_results: list[dict],
+    wiki_context: str,
+    raw_images: list[str],
+    image_roles: list[str],
+    image_map: dict[str, str],
+    model_names: list[str],
+) -> dict:
+    """BOARD_MODE=off: 변경 전 단일 VLM/LLM interpret 경로."""
+    prompt = build_interpret_prompt(
+        query, task, execution_context, step_results, wiki_context,
+        image_roles=image_roles,
+    )
+    try:
+        if raw_images:
+            interpretation = await llm_client.generate_with_images(
+                prompt, raw_images, system=SYSTEM_INTERPRET,
+            )
+        else:
+            interpretation = await llm_client.generate(prompt, system=SYSTEM_INTERPRET)
+    except httpx.HTTPError as exc:
+        logger.exception("[interpret:off] VLM/LLM HTTP error; retrying text-only")
+        fallback_prompt = (
+            f"{prompt}\n\n## 시스템 참고\n"
+            "이미지 해석 요청이 실패했습니다. 제공된 모델 출력만으로 보수적으로 해석하세요. "
+            f"오류 유형: {type(exc).__name__}"
+        )
+        try:
+            interpretation = await llm_client.generate(
+                fallback_prompt, system=SYSTEM_INTERPRET,
+            )
+        except Exception:
+            logger.exception("[interpret:off] text fallback failed")
+            interpretation = ""
+    except Exception:
+        logger.exception("[interpret:off] generation failed")
+        interpretation = ""
+
+    if _needs_interpretation_retry(interpretation):
+        retry_prompt = (
+            f"{prompt}\n\n## 재출력 지시\n"
+            "이전 응답의 분석이 충분하지 않습니다. Summary, Key Imaging Findings, "
+            "Clinical Interpretation, Recommendations or Limitations를 포함해 다시 작성하세요."
+        )
+        try:
+            if raw_images:
+                interpretation = await llm_client.generate_with_images(
+                    retry_prompt, raw_images, system=SYSTEM_INTERPRET,
+                )
+            else:
+                interpretation = await llm_client.generate(
+                    retry_prompt, system=SYSTEM_INTERPRET,
+                )
+        except Exception:
+            logger.exception("[interpret:off] quality retry failed")
+
+    if _needs_interpretation_retry(interpretation):
+        interpretation = _build_interpretation_fallback(
+            task=task, step_results=step_results, image_roles=image_roles,
+        )
+    interpretation = _ensure_all_image_tokens(interpretation, image_roles)
+
+    for name in dict.fromkeys(n for n in model_names if n):
+        resolved = wiki_service.resolve_model(name)
+        if resolved:
+            project, model_name = resolved
+            wiki_service.append_interpretation(project, model_name, interpretation)
+            wiki_service.append_log("interpret", f"{project}/{model_name} 결과 해석 완료")
+
+    return {
+        "status": "confirmed",
+        "result": {
+            "finding": interpretation,
+            "interpretation": "",
+            "recommendation": "",
+            "risk_tier": "moderate",
+            "confidence": {
+                "display": None,
+                "source_model": None,
+                "task_type": None,
+                "model_scores": [],
+                "conflict": False,
+                "score_gap": None,
+            },
+        },
+        "interpretation": interpretation,
+        "interpretation_raw": interpretation,
+        "board": {},
+        "escalation_reason": None,
+        "images": image_map,
+    }
+
+def _empty_reader() -> dict:
+    return {
+        "finding": "", "interpretation": "", "recommendation": "",
+        "claims": [], "sentence_map": [],
+    }
+
+
+def _empty_challenger() -> dict:
+    return {"differential": [], "source": "blind_same_model"}
+
+
+def _empty_evidence() -> dict:
+    return {"evidence_map": [], "unsupported_claims": []}
+
+
+def _empty_guardian() -> dict:
+    return {
+        "veto": False, "risk_tier": "moderate", "flags": [],
+        "rationale": "", "evidence_refs": [],
+    }
+
+
+_BOARD_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "board")
+
+
+def _load_thresholds() -> dict:
+    """board/thresholds.yaml 로드."""
+    path = os.path.join(_BOARD_DIR, "thresholds.yaml")
+    out = {
+        "score_gap_max": 0.2,
+    }
+    try:
+        with open(path, encoding="utf-8") as f:
+            loaded = yaml.safe_load(f)
+        if isinstance(loaded, dict):
+            out.update(loaded)
+    except Exception:
+        logger.exception("[board] thresholds.yaml load failed; using defaults")
+    return out
+
+
+def _normalize_label(text: str) -> str:
+    return re.sub(r"[\s_\-]+", " ", str(text or "").strip().lower())
+
+
+def _iter_pred_entries(preds):
+    """다양한 predictions 스키마에서 (label, score) 후보를 산출.
+    - [{"label": "...", "score"/"probability"/"confidence": 0.x}, ...]
+    - {"label": score, ...} (dict of label→prob)
+    """
+    if isinstance(preds, list):
+        for p in preds:
+            if isinstance(p, dict):
+                label = (
+                    p.get("label") or p.get("class") or p.get("name")
+                    or p.get("finding") or p.get("pred_name")
+                )
+                score = p.get("score")
+                if score is None:
+                    score = p.get("probability")
+                if score is None:
+                    score = p.get("confidence")
+                if score is None:
+                    score = p.get("prob")
+                if score is None:
+                    score = p.get("conf")
+                yield label, score
+    elif isinstance(preds, dict):
+        for k, v in preds.items():
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                yield k, v
+
+
+def _jaccard(a: set, b: set) -> float:
+    if not a and not b:
+        return 1.0
+    union = a | b
+    if not union:
+        return 1.0
+    return len(a & b) / len(union)
+
+
+def _step_task_type(step: dict) -> str:
+    explicit = str(step.get("task_type") or "").strip().lower()
+    if explicit:
+        if "classif" in explicit:
+            return "classification"
+        if "detect" in explicit or "bbox" in explicit:
+            return "detection"
+        if "segment" in explicit:
+            return "segmentation"
+        return explicit
+    result_type = str(step.get("result_type") or "").lower()
+    if "classification" in result_type or "probabil" in result_type:
+        return "classification"
+    if "detection" in result_type or "bbox" in result_type:
+        return "detection"
+    if "segmentation" in result_type:
+        return "segmentation"
+    return "unknown"
+
+
+def _labels_match(a: str, b: str) -> bool:
+    a_norm, b_norm = _normalize_label(a), _normalize_label(b)
+    if not a_norm or not b_norm:
+        return False
+    return a_norm == b_norm or a_norm in b_norm or b_norm in a_norm
+
+
+def _build_confidence(claims: list[dict], step_results: list[dict]) -> dict:
+    """UI confidence와 동일-태스크 모델 이견을 계산한다.
+
+    classification은 질환 확률의 대표값 후보이고 detection confidence는 근거
+    위치의 신뢰도이므로 서로 score_gap을 계산하지 않는다.
+    """
+    claim_labels = [
+        str(c.get("label", "")) for c in claims
+        if isinstance(c, dict) and c.get("label")
+    ]
+    primary_label = claim_labels[0] if claim_labels else None
+    scores: list[dict] = []
+    if primary_label is None:
+        return {
+            "display": None, "source_model": None, "task_type": None,
+            "model_scores": [], "conflict": False, "score_gap": None,
+        }
+    for step in step_results:
+        task_type = _step_task_type(step)
+        for label, score in _iter_pred_entries(step.get("predictions")):
+            if label is None or not isinstance(score, (int, float)) or isinstance(score, bool):
+                continue
+            if not _labels_match(str(label), primary_label):
+                continue
+            scores.append({
+                "model": str(step.get("model") or ""),
+                "task_type": task_type,
+                "label": str(label),
+                "score": float(score),
+            })
+
+    classification_scores = [s for s in scores if s["task_type"] == "classification"]
+    comparable = classification_scores
+    gap = None
+    conflict = False
+    comparable_model_count = len({s["model"] for s in comparable})
+    if comparable_model_count >= 2:
+        values = [s["score"] for s in comparable]
+        gap = max(values) - min(values)
+        conflict = gap > float(_load_thresholds().get("score_gap_max", 0.2))
+
+    # 동일 classification 모델이 둘 이상이면 임의의 대표값이나 평균으로 이견을
+    # 숨기지 않고 model_scores를 그대로 노출한다.
+    display_source = (
+        classification_scores[0]
+        if classification_scores and comparable_model_count < 2
+        else None
+    )
+    return {
+        "display": display_source["score"] if display_source else None,
+        "source_model": display_source["model"] if display_source else None,
+        "task_type": "classification" if display_source else None,
+        "model_scores": scores,
+        "conflict": conflict,
+        "score_gap": gap,
+    }
+
+
+def _calibrate(
+    reader_out: dict,
+    challenger_out: dict,
+    guardian_out: dict,
+    confidence: dict,
+) -> dict:
+    """역할 간 일치는 관찰값, 동일 classification 모델의 score gap은 게이트 신호."""
+    reader_labels = {
+        _normalize_label(c.get("label", ""))
+        for c in reader_out.get("claims", []) if isinstance(c, dict) and c.get("label")
+    }
+    challenger_labels = {
+        _normalize_label(d.get("label", ""))
+        for d in challenger_out.get("differential", []) if isinstance(d, dict) and d.get("label")
+    }
+    agreement_score = _jaccard(reader_labels, challenger_labels)
+
+    return {
+        "agreement_score": agreement_score,
+        "score_gap": confidence.get("score_gap"),
+        "model_conflict": bool(confidence.get("conflict")),
+        "veto": bool(guardian_out.get("veto", False)),
+        "risk_tier": guardian_out.get("risk_tier", "moderate"),
+    }
+
+
+def _decide_escalation(calib: dict) -> tuple[str, str | None]:
+    """트리거 = Guardian veto/high-risk OR 동일 classification 모델 score gap."""
+    thresholds = _load_thresholds()
+    score_gap_max = thresholds.get("score_gap_max", 0.2)
+
+    veto = bool(calib.get("veto", False))
+    risk_tier = calib.get("risk_tier")
+    score_gap = calib.get("score_gap")
+
+    if veto:
+        return "pending_review", "guardian_veto"
+    if risk_tier in {"high", "critical"}:
+        return "pending_review", "high_risk"
+    # label 문자열 Jaccard는 관찰 지표로만 보존한다. 동의어/표현 차이를 임상 이견으로
+    # 오판할 수 있어 단독 escalation 근거로 사용하지 않는다.
+    if isinstance(score_gap, (int, float)) and score_gap > score_gap_max:
+        return "pending_review", "model_disagreement"
+    return "confirmed", None
+
+
+def _synthesize_final(
+    reader_out: dict,
+    evidence_out: dict,
+    challenger_out: dict,
+    guardian_out: dict,
+    confidence: dict,
+) -> dict:
+    """Reader 3필드를 근거 검증 후 UI용 5필드로 조립한다."""
+    fields = {
+        key: str(reader_out.get(key, "") or "")
+        for key in ("finding", "interpretation", "recommendation")
+    }
+    unsupported = {
+        _normalize_label(c) for c in evidence_out.get("unsupported_claims", []) if c
+    }
+    if unsupported:
+        sentence_map = reader_out.get("sentence_map", [])
+        for entry in sentence_map:
+            if not isinstance(entry, dict):
+                continue
+            claim_label = _normalize_label(entry.get("claim_label", ""))
+            sentence = entry.get("sentence", "")
+            if sentence and (claim_label in unsupported):
+                field = entry.get("field")
+                targets = [field] if field in fields else list(fields)
+                for target in targets:
+                    fields[target] = fields[target].replace(
+                        sentence, f"(근거 미확인으로 보류됨: {claim_label})"
+                    )
+
+    differential = challenger_out.get("differential", [])
+    if differential:
+        lines = ["\n\n### 감별진단 고려"]
+        for d in differential:
+            if isinstance(d, dict):
+                label = d.get("label", "")
+                rationale = d.get("rationale", "")
+                if label:
+                    lines.append(f"- {label}" + (f": {rationale}" if rationale else ""))
+        if len(lines) > 1:
+            fields["interpretation"] = fields["interpretation"].rstrip() + "\n".join(lines)
+
+    return {
+        **{key: value.strip() for key, value in fields.items()},
+        "risk_tier": guardian_out.get("risk_tier", "moderate"),
+        "confidence": confidence,
+    }
+
+
+def _render_legacy_interpretation(result: dict) -> str:
+    sections = [
+        ("소견", result.get("finding", "")),
+        ("임상적 해석", result.get("interpretation", "")),
+        ("권장조치 및 한계", result.get("recommendation", "")),
+    ]
+    return "\n\n".join(
+        f"## {title}\n{body}".rstrip() for title, body in sections if body
+    ).strip()
 
 
 
@@ -866,6 +1298,14 @@ def _needs_interpretation_retry(text: str) -> bool:
 
     sentence_count = len(re.findall(r"[.!?]\s+|[다요]\n|[다요]\s", stripped))
     return sentence_count < 4
+
+
+def _needs_structured_result_retry(result: dict) -> bool:
+    fields = [
+        re.sub(r"\[IMG:[^\]]+\]", "", str(result.get(key, ""))).strip()
+        for key in ("finding", "interpretation", "recommendation")
+    ]
+    return not all(fields) or sum(len(field) for field in fields) < 120
 
 
 def _build_interpretation_fallback(task: dict, step_results: list[dict], image_roles: list[str]) -> str:

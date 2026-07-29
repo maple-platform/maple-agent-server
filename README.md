@@ -403,13 +403,60 @@ AGENT_URL=http://localhost:8101 python scan_and_register.py
 
 ```json
 {
-  "interpretation": "## 전체 요약\n우측 하엽에 폐렴 의심 혼탁 소견이 확인되었으며...\n\n[IMG:bbox_overlay]",
-  "interpretation_raw": "## 전체 요약\n우측 하엽에 폐렴 의심 혼탁 소견이 확인되었으며...\n\n[IMG:bbox_overlay]",
+  "status": "confirmed",
+  "result": {
+    "finding": "우측 하엽에 폐렴 의심 혼탁 소견이 확인됩니다.\n[IMG:bbox_overlay]",
+    "interpretation": "영상 소견과 분류 확률을 함께 고려하면 폐렴 가능성이 있습니다.",
+    "recommendation": "임상 증상 및 검사실 소견과 연계한 전문의 검토를 권고합니다.",
+    "risk_tier": "moderate",
+    "confidence": {
+      "display": 0.61,
+      "source_model": "ChestXray14_Multilabel_Classification",
+      "task_type": "classification",
+      "model_scores": [],
+      "conflict": false,
+      "score_gap": null
+    }
+  },
+  "interpretation": "## 소견\n...\n\n## 임상적 해석\n...\n\n## 권장조치 및 한계\n...",
+  "interpretation_raw": "기존 클라이언트 호환용 마크다운",
+  "board": {},
+  "escalation_reason": null,
   "images": {"bbox_overlay": "data:image/png;base64,..."}
 }
 ```
 
 > `[IMG:role]` 토큰 위치에 `images` 맵의 이미지를 인라인 렌더링합니다.
+> 동일 classification 태스크 모델이 둘 이상이면 대표 confidence를 임의로
+> 집계하지 않고 `model_scores`와 `score_gap`을 노출합니다. `score_gap > 0.2`는
+> `pending_review` 및 `model_disagreement` 사유가 됩니다. Detection과
+> classification처럼 서로 다른 태스크의 점수는 비교하지 않습니다.
+
+**Board on/off**
+
+```env
+BOARD_MODE=on   # 기본값: Clinical Board 검증 결과 사용
+BOARD_MODE=off  # 기존 단일 VLM/LLM interpret 사용
+```
+
+환경변수 변경 후 agent-server를 재시작해야 적용됩니다. `off`에서는 Reader,
+Challenger, Evidence, Guardian을 호출하지 않으며 기존 `interpretation/images`
+계약을 그대로 반환합니다.
+
+`on`의 Clinical Board 처리 흐름은 다음과 같습니다.
+
+```text
+Reader(구조화 1차 판독)
+  → Challenger(블라인드 감별진단)
+  → Evidence(RAG 주장별 근거 대조)
+  → Guardian(don't-miss·위험도 검토)
+  → Calibration(동일 classification 모델 score gap)
+  → Orchestrator(최종 5필드 결과와 검토 상태 조립)
+```
+
+Guardian veto, `high/critical` 위험도, Board 구성요소 실패 또는 동일 태스크
+모델의 `score_gap > 0.2`가 발생하면 `status=pending_review`로 반환합니다.
+LLM JSON 파싱 실패와 필수 필드 누락은 자동 확정하지 않고 fail-closed 처리합니다.
 
 **자동 재시도 및 폴백**
 

@@ -58,3 +58,15 @@ For general analysis:
 
 
 ALLOWED_PLAN_TYPES = {"execution", "knowledge", "general"}
+
+
+BOARD_READER_OUTPUT_SCHEMA_TEXT = """
+Return only valid JSON, no markdown fences:
+{
+  "finding": "마크다운 텍스트. 관찰된 소견. [IMG:role] 토큰 삽입 가능.",
+  "interpretation": "마크다운 텍스트. 소견의 임상적 의미와 감별진단.",
+  "recommendation": "마크다운 텍스트. 권장 조치와 한계점.",
+  "claims": [{"label": "finding label", "text": "one clinical claim"}],
+  "sentence_map": [{"claim_label": "finding label", "field": "finding|interpretation|recommendation", "sentence": "supporting sentence"}]
+}
+""".strip()
