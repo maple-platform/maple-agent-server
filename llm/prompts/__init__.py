@@ -6,6 +6,10 @@ from .system import (
     SYSTEM_INTERPRET,
     SYSTEM_INTENT,
     SYSTEM_GENERAL,
+    SYSTEM_READER,
+    SYSTEM_CHALLENGER,
+    SYSTEM_EVIDENCE,
+    SYSTEM_GUARDIAN,
 )
 
 from .builders import (
@@ -16,6 +20,10 @@ from .builders import (
     build_model_select_prompt,
     build_general_prompt,
     build_general_prompt_from_attachments,
+    build_reader_prompt,
+    build_challenger_prompt,
+    build_evidence_prompt,
+    build_guardian_prompt,
 )
 
 from .schemas import (
@@ -32,6 +40,10 @@ __all__ = [
     "SYSTEM_INTERPRET",
     "SYSTEM_INTENT",
     "SYSTEM_GENERAL",
+    "SYSTEM_READER",
+    "SYSTEM_CHALLENGER",
+    "SYSTEM_EVIDENCE",
+    "SYSTEM_GUARDIAN",
     "build_plan_prompt",
     "build_clinical_prompt",
     "build_interpret_prompt",
@@ -39,6 +51,10 @@ __all__ = [
     "build_model_select_prompt",
     "build_general_prompt",
     "build_general_prompt_from_attachments",
+    "build_reader_prompt",
+    "build_challenger_prompt",
+    "build_evidence_prompt",
+    "build_guardian_prompt",
     "PLAN_EXECUTION_SCHEMA",
     "PLAN_KNOWLEDGE_SCHEMA",
     "PLAN_GENERAL_SCHEMA",

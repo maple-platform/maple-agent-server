@@ -62,12 +62,13 @@ class StepResult(BaseModel):
 
     step: int | str        # prediction=순번(int), general DAG=step_id(str "s1")
     model: str = ""
+    task_type: str = ""
     result_type: str = ""  # 컨테이너가 안 주면 null로 올 수 있음 → "" 흡수
     predictions: Any = Field(default_factory=list)
     model_output: Any = Field(default_factory=dict)      # ROI 좌표, 분류 상세, segmentation 메타, raw text 등
     images: list[ImageResult | dict | str] = Field(default_factory=list)
 
-    @field_validator("model", mode="before")
+    @field_validator("model", "task_type", mode="before")
     @classmethod
     def _none_to_str(cls, value):
         return "" if value is None else value
@@ -105,6 +106,81 @@ class InterpretRequest(BaseModel):
     task: TaskInfo = TaskInfo(department="", project="")
     execution_context: ExecutionContext = ExecutionContext(mode="prediction")
     step_results: list[StepResult]
+
+
+# ── Clinical Board 응답 스키마 (v4 2.6) ─────────────────────────────────────────
+
+class BoardReader(BaseModel):
+    finding: str = ""
+    interpretation: str = ""
+    recommendation: str = ""
+    claims: list[dict] = Field(default_factory=list)
+
+
+class BoardChallenger(BaseModel):
+    differential: list[dict] = Field(default_factory=list)
+    source: Literal["alt_model", "blind_same_model"] = "blind_same_model"
+
+
+class BoardEvidence(BaseModel):
+    evidence_map: list[dict] = Field(default_factory=list)
+    unsupported_claims: list[str] = Field(default_factory=list)
+
+
+class BoardGuardian(BaseModel):
+    veto: bool = False
+    risk_tier: Literal["low", "moderate", "high", "critical"] = "moderate"
+    flags: list[str] = Field(default_factory=list)
+    rationale: str = ""
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
+class BoardCalibration(BaseModel):
+    agreement_score: float | None = None
+    score_gap: float | None = None
+    model_conflict: bool = False
+
+
+class Board(BaseModel):
+    reader: BoardReader = Field(default_factory=BoardReader)
+    challenger: BoardChallenger = Field(default_factory=BoardChallenger)
+    evidence: BoardEvidence = Field(default_factory=BoardEvidence)
+    guardian: BoardGuardian = Field(default_factory=BoardGuardian)
+    calibration: BoardCalibration = Field(default_factory=BoardCalibration)
+
+
+class ConfidenceScore(BaseModel):
+    model: str = ""
+    task_type: str = ""
+    label: str = ""
+    score: float
+
+
+class Confidence(BaseModel):
+    display: float | None = None
+    source_model: str | None = None
+    task_type: str | None = None
+    model_scores: list[ConfidenceScore] = Field(default_factory=list)
+    conflict: bool = False
+    score_gap: float | None = None
+
+
+class InterpretResult(BaseModel):
+    finding: str = ""
+    interpretation: str = ""
+    recommendation: str = ""
+    risk_tier: Literal["low", "moderate", "high", "critical"] = "moderate"
+    confidence: Confidence = Field(default_factory=Confidence)
+
+
+class InterpretResponse(BaseModel):
+    status: Literal["confirmed", "pending_review"]
+    result: InterpretResult = Field(default_factory=InterpretResult)
+    interpretation: str = ""
+    interpretation_raw: str = ""
+    board: Board = Field(default_factory=Board)
+    escalation_reason: str | None = None
+    images: dict = Field(default_factory=dict)
 
 
 @router.post("/plan")
@@ -152,7 +228,7 @@ async def plan(req: PlanRequest):
     return result
 
 
-@router.post("/interpret")
+@router.post("/interpret", response_model=InterpretResponse)
 async def interpret(req: InterpretRequest):
     # RSNA QI EXPERIMENT LOGGING START: timing-only side effect; safe to remove after study.
     started = time.perf_counter()
